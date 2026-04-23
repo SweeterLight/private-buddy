@@ -4,6 +4,7 @@ from app.services.context.summary import SummaryService
 from app.services.context.vector_store import VectorStoreService
 from app.services.context.preprocessing import QueryPreprocessingService, QUERY_TYPE_CLEAR, QUERY_TYPE_AMBIGUOUS, QUERY_TYPE_VAGUE, QUERY_TYPE_NO_QUERY
 from app.services.context.narrative import NarrativeService
+from app.services.context.user_state import UserStateService, UserState
 
 __all__ = [
     "ContextAssemblyService",
@@ -12,6 +13,8 @@ __all__ = [
     "VectorStoreService",
     "QueryPreprocessingService",
     "NarrativeService",
+    "UserStateService",
+    "UserState",
     "QUERY_TYPE_CLEAR",
     "QUERY_TYPE_AMBIGUOUS",
     "QUERY_TYPE_VAGUE",

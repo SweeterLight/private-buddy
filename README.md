@@ -3,7 +3,7 @@
   <h1>Private Buddy</h1>
 </div>
 
-A modern, private AI assistant system built from scratch. I initially called this project "Boring Practice" because it was just a practice project - I wanted to build a modern agent system from zero to show I know how to do it. I didn't plan to create anything fancy; I just wanted to copy the features that other agent systems have, like watching a documentary - boring (at least for now). The name "Private Buddy" isn't much better, but it at least captures what this is: a personal, privacy-focused AI assistant.
+A modern, private AI assistant system built from scratch. I initially called this project "Boring Practice" because it was just a practice project - I wanted to build a modern agent system from zero to show I know how to do it. I didn't plan to create anything fancy; I once just wanted to copy the features that other agent systems have, like watching a documentary - boring. However, recently I found something interesting — as an engineer without a background in cognitive science, psychology, or narratology, I discovered that through AI one can quickly judge whether certain theories have practical positive significance for the current business or engineering, and then apply them cross-disciplinarily, which was truly hard to imagine before.
 
 ---
 

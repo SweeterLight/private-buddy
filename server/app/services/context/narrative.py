@@ -8,7 +8,12 @@ to understand the conversation history.
 The narrative generation process:
 1. Combine summary content (if available)
 2. Combine relevant RAG segments (if available)
-3. Use LLM to generate a coherent third-person narrative
+3. Use LLM to generate a coherent narrative from the agent's perspective
+
+Narrative Perspective Design:
+- Uses internal focalization (agent's viewpoint) rather than external focalization
+- The agent is addressed as "You" to enhance immersion and continuity
+- This helps the LLM naturally continue the conversation rather than "retell" it
 """
 
 from typing import Optional, Dict, Any, List
@@ -34,7 +39,7 @@ class NarrativeService:
 {segments_section}
 
 Integrate the above information into a coherent background narrative with the following requirements:
-1. Use third-person perspective
+1. Use second-person perspective (address the agent as "You"). For example: "You have been discussing X with the user. The user mentioned..."
 2. Preserve key information and context
 3. The narrative should be coherent and flowing, not a simple list
 4. Output only the narrative content, without additional explanations
@@ -73,7 +78,8 @@ IMPORTANT: The narrative MUST preserve the original language of the conversation
         Generate a background story from summary and RAG segments.
         
         This method combines the summary and relevant segments into a prompt
-        and uses LLM to generate a coherent third-person narrative.
+        and uses LLM to generate a coherent narrative from the agent's perspective
+        (internal focalization).
         
         Args:
             llm_config: LLM configuration for narrative generation

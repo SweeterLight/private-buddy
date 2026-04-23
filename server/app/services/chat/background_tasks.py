@@ -17,6 +17,7 @@ from app.services.data_service import DataService
 from app.services.chat.connection_manager import manager
 from app.services.llm.llm_logger import TokenUsageLogger
 from app.services.context import SummaryService, RetrievalService, ContextAssemblyService, QueryPreprocessingService, NarrativeService
+from app.services.context.user_state import UserStateService
 from app.database import SessionLocal
 from app.config import get_settings
 from app.logger import logger
@@ -200,13 +201,23 @@ async def process_chat_task(
                 db.commit()
                 return
             
-            # Step 3: Generate background narrative from summary + segments
+            # Step 3: Generate background narrative and infer user state in parallel
+            # Run narrative generation and user state inference concurrently
             if context['summary'] or context.get('relevant_segments'):
-                background_story = await NarrativeService.generate_background_story(
-                    llm_config, context['summary'], context.get('relevant_segments', [])
+                background_story, user_state_result = await asyncio.gather(
+                    NarrativeService.generate_background_story(
+                        llm_config, context['summary'], context.get('relevant_segments', [])
+                    ),
+                    UserStateService.infer_user_state(llm_config, context['recent_messages'])
                 )
             else:
                 background_story = None
+                user_state_result = await UserStateService.infer_user_state(
+                    llm_config, context['recent_messages']
+                )
+            
+            # Convert user state to natural language description for prompt injection
+            user_state_description = user_state_result.to_natural_language() if user_state_result else None
             
             # Step 4: Calculate message sequence numbers for metadata
             # Note: summary_version and recent_messages range are DECOUPLED
@@ -215,16 +226,17 @@ async def process_chat_task(
             summary_version = context['summary']['version'] if context['summary'] else None
             recent_start = message_count - len(context['recent_messages']) + 1
             
-            # Step 5: Assemble context with metadata
+            # Step 5: Assemble context with metadata and user state
             langchain_messages = ContextAssemblyService.assemble_context(
                 character_settings=agent.character_settings if agent.character_settings else None,
                 background_story=background_story,
                 recent_messages=context['recent_messages'],
                 summary_version=summary_version,
                 recent_start=recent_start,
-                recent_end=message_count
+                recent_end=message_count,
+                user_state_description=user_state_description
             )
-            logger.info(f"Using context assembly with background_story: {background_story is not None}")
+            logger.info(f"Using context assembly with background_story: {background_story is not None}, user_state: {user_state_description is not None}")
         
         logger.debug(f"Message list for LLM: {[{'type': type(m).__name__, 'content': m.content} for m in langchain_messages]}")
         
