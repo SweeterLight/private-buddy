@@ -80,7 +80,7 @@ export interface Interaction {
   agent_msg_id: number;
   iteration: number;
   type: number;
-  timestamp: string;
+  updated_at: string;
   data: string;
   created_at: string;
 }

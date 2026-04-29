@@ -9,7 +9,7 @@ Supports multiple search providers:
 import json
 from typing import Any, Dict, List, Optional
 
-from app.services.agent.tools.base import Tool
+from app.services.task.tools.base import Tool
 from app.logger import logger
 
 

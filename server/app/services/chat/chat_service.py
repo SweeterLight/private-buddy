@@ -13,7 +13,6 @@ from typing import AsyncGenerator
 from app.models.message import Message
 from app.services.llm import LLMService
 from app.services.data_service import DataService
-from app.services.llm.llm_logger import TokenUsageLogger
 from app.logger import logger
 
 
@@ -81,7 +80,7 @@ class ChatService:
             logger.info("Starting LLM stream...")
             full_response = ""
             
-            async for chunk in chat_model.astream(langchain_messages, config={"callbacks": [TokenUsageLogger()]}):
+            async for chunk in chat_model.astream(langchain_messages):
                 if chunk.content:
                     full_response += chunk.content
                     yield chunk.content

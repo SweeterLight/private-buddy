@@ -20,7 +20,6 @@ from typing import Optional, Dict, Any, List
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 from app.models.llm_config import LLMConfig
-from app.services.llm.llm_logger import TokenUsageLogger
 from app.logger import logger
 
 
@@ -119,7 +118,7 @@ IMPORTANT: The narrative MUST preserve the original language of the conversation
                 HumanMessage(content=prompt)
             ]
 
-            response = await chat_model.ainvoke(messages, config={"callbacks": [TokenUsageLogger()]})
+            response = await chat_model.ainvoke(messages)
             background_story = response.content.strip()
 
             logger.info(f"Generated background story, length: {len(background_story)}")

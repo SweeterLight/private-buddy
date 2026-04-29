@@ -8,8 +8,10 @@ class Settings(BaseSettings):
     summary_window_size: int = 5
     chroma_persist_dir: str = "./chroma_db"
     log_level: str = "INFO"
-    task_max_iterations: int = 90
+    task_max_iterations: int = 50
     workspace_root: str = ""
+    context_window_iterations: int = 10
+    notes_max_chars: int = 5000
     llm_base_url: str = ""
     llm_model: str = ""
     llm_api_key: str = ""

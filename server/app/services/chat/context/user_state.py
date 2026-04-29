@@ -18,7 +18,6 @@ from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 from app.models.llm_config import LLMConfig
-from app.services.llm.llm_logger import TokenUsageLogger
 from app.logger import logger
 
 
@@ -176,9 +175,7 @@ Also determine if the user's request requires interaction with the external worl
             prompt = UserStateService.INFERENCE_PROMPT.format(recent_messages=dialog_text)
             messages = [HumanMessage(content=prompt)]
 
-            result = await structured_model.ainvoke(
-                messages, config={"callbacks": [TokenUsageLogger()]}
-            )
+            result = await structured_model.ainvoke(messages)
 
             logger.info(f"Inferred user state: emotion={result.emotion}, purpose={result.purpose}, situation={result.situation}, needs_world_interaction={result.needs_world_interaction}")
             return result

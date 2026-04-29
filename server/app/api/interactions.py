@@ -28,7 +28,7 @@ class InteractionResponse(BaseModel):
     agent_msg_id: int
     iteration: int
     type: int
-    timestamp: datetime
+    updated_at: datetime
     data: str
     created_at: datetime
 

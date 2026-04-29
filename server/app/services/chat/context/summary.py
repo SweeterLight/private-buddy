@@ -21,7 +21,6 @@ from app.models.historical_summary import HistoricalSummary
 from app.models.message import Message
 from app.models.llm_config import LLMConfig
 from app.services.llm import LLMService
-from app.services.llm.llm_logger import TokenUsageLogger
 from app.logger import logger
 from langchain_core.messages import HumanMessage
 
@@ -256,7 +255,7 @@ IMPORTANT: The summary MUST preserve the original language of the conversation.
                 HumanMessage(content=prompt)
             ]
 
-            response = await chat_model.ainvoke(langchain_messages, config={"callbacks": [TokenUsageLogger()]})
+            response = await chat_model.ainvoke(langchain_messages)
             summary_content = response.content
 
             # Persist the summary

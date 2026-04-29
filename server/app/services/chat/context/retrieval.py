@@ -14,8 +14,8 @@ from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional
 from app.models.message import Message
 from app.models.embedding_config import EmbeddingConfig
-from app.services.context.summary import SummaryService
-from app.services.context.vector_store import VectorStoreService
+from app.services.chat.context.summary import SummaryService
+from app.services.chat.context.vector_store import VectorStoreService
 from app.services.data_service import DataService
 from app.logger import logger
 

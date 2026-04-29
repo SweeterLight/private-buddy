@@ -11,6 +11,7 @@ The assembly process includes:
 - Background story formatting with metadata
 - Recent message formatting with sequence numbers
 - User state injection as natural language in instruction area
+- Agent delivery integration for world-interaction results
 
 Template Design:
 - Uses narrative-style section headers instead of bracketed labels
@@ -22,6 +23,7 @@ Template Design:
 
 from typing import List, Dict, Any, Optional
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
+from app.services.dto.task_result import TaskResult
 from app.logger import logger
 
 
@@ -36,6 +38,7 @@ class ContextAssemblyService:
     - Background story provides compressed historical context
     - Recent messages provide precise details for current context
     - User state guides response strategy via natural language instruction
+    - Agent delivery provides world-interaction results when applicable
     """
     
     # Template for full context with background story and character settings
@@ -51,7 +54,7 @@ Recent conversation (messages {recent_start}-{recent_end}):
 
 ---
 
-{user_state_instruction}Please respond directly to the user. Do not use parenthetical action descriptions or non-verbal content."""
+{task_result_section}{user_state_instruction}Please respond directly to the user. Do not use parenthetical action descriptions or non-verbal content."""
 
     # Template for simple context without background story (V < N case)
     ONE_BIG_MESSAGE_NO_STORY_TEMPLATE = """{character_section}Conversation record (messages {recent_start}-{recent_end}):
@@ -60,7 +63,7 @@ Recent conversation (messages {recent_start}-{recent_end}):
 
 ---
 
-{user_state_instruction}Please respond directly to the user. Do not use parenthetical action descriptions or non-verbal content."""
+{task_result_section}{user_state_instruction}Please respond directly to the user. Do not use parenthetical action descriptions or non-verbal content."""
 
     @staticmethod
     def _format_character_section(character_settings: Optional[str]) -> str:
@@ -99,6 +102,35 @@ Recent conversation (messages {recent_start}-{recent_end}):
         return f"{user_state_description}\nAdjust your response tone, detail level, and strategy accordingly.\n\n"
 
     @staticmethod
+    def _format_task_result_section(task_result: Optional["TaskResult"]) -> str:
+        """
+        Format agent delivery section for the prompt.
+        
+        When the agent has executed a world-interaction task, this section
+        provides the execution results to the LLM for generating a natural
+        language response.
+        
+        Args:
+            task_result: The agent execution result containing status,
+                result/reason, and notes.
+            
+        Returns:
+            Formatted agent delivery section string, or empty string if no delivery.
+        """
+        if not task_result:
+            return ""
+        
+        if task_result.status == "success":
+            return f"[Task Execution Result]\nThe following task was completed successfully:\n\n{task_result.result or 'Task completed.'}\n\n---\n\n"
+        else:
+            # Failure case: include notes for context
+            notes_section = ""
+            if task_result.notes:
+                notes_section = f"\n\nProgress notes:\n{task_result.notes}"
+            
+            return f"[Task Execution Interrupted]\nThe task could not be completed.\n\nReason: {task_result.reason or 'Unknown error'}{notes_section}\n\n---\n\n"
+
+    @staticmethod
     def assemble_context(
         character_settings: Optional[str],
         background_story: Optional[str],
@@ -106,7 +138,8 @@ Recent conversation (messages {recent_start}-{recent_end}):
         summary_version: Optional[int] = None,
         recent_start: int = 1,
         recent_end: int = 1,
-        user_state_description: Optional[str] = None
+        user_state_description: Optional[str] = None,
+        task_result: Optional["TaskResult"] = None,
     ) -> List[BaseMessage]:
         """
         Assemble context into one big message for LLM processing.
@@ -124,6 +157,8 @@ Recent conversation (messages {recent_start}-{recent_end}):
             recent_end: Ending message sequence number for recent messages
             user_state_description: Natural language description of inferred user state,
                 placed in instruction area to guide response strategy
+            task_result: Agent execution result for world-interaction tasks,
+                provides execution status and results for LLM to formulate response
             
         Returns:
             List of LangChain messages ready for LLM processing
@@ -135,6 +170,9 @@ Recent conversation (messages {recent_start}-{recent_end}):
 
         # Format user state instruction
         user_state_instruction = ContextAssemblyService._format_user_state_instruction(user_state_description)
+
+        # Format agent delivery section
+        task_result_section = ContextAssemblyService._format_task_result_section(task_result)
 
         # Format recent messages into dialog section
         dialog_lines = []
@@ -152,7 +190,8 @@ Recent conversation (messages {recent_start}-{recent_end}):
                 summary_version=summary_version,
                 recent_start=recent_start,
                 recent_end=recent_end,
-                user_state_instruction=user_state_instruction
+                user_state_instruction=user_state_instruction,
+                task_result_section=task_result_section,
             )
         else:
             one_big_message = ContextAssemblyService.ONE_BIG_MESSAGE_NO_STORY_TEMPLATE.format(
@@ -160,12 +199,12 @@ Recent conversation (messages {recent_start}-{recent_end}):
                 dialog_section=dialog_section,
                 recent_start=recent_start,
                 recent_end=recent_end,
-                user_state_instruction=user_state_instruction
+                user_state_instruction=user_state_instruction,
+                task_result_section=task_result_section,
             )
 
         # Add the one big message as a HumanMessage
         messages.append(HumanMessage(content=one_big_message))
 
-        logger.info(f"Assembled context with {len(messages)} messages, user_state: {user_state_description is not None}")
+        logger.info(f"Assembled context with {len(messages)} messages, user_state: {user_state_description is not None}, task_result: {task_result is not None}")
         return messages
-

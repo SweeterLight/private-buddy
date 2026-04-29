@@ -16,7 +16,6 @@ from pydantic import BaseModel, Field, model_validator
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 from app.models.llm_config import LLMConfig
-from app.services.llm.llm_logger import TokenUsageLogger
 from app.logger import logger
 
 
@@ -185,7 +184,7 @@ Output only the clarification question, without any additional content."""
         
         try:
             messages = [HumanMessage(content=prompt)]
-            result = await structured_model.ainvoke(messages, config={"callbacks": [TokenUsageLogger()]})
+            result = await structured_model.ainvoke(messages)
             
             logger.info(f"Query routing result: type={result.type}")
             if result.type == QUERY_TYPE_AMBIGUOUS:
@@ -239,7 +238,7 @@ Output only the clarification question, without any additional content."""
                 prompt = f"[Your Character]\n{character_settings}\n\n{prompt}"
             messages = [HumanMessage(content=prompt)]
             
-            response = await chat_model.ainvoke(messages, config={"callbacks": [TokenUsageLogger()]})
+            response = await chat_model.ainvoke(messages)
             clarification = response.content.strip()
             
             logger.info(f"Generated clarification for query: '{query}'")

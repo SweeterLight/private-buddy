@@ -12,11 +12,13 @@ from app.database import get_db
 from app.models.session import Session as SessionModel
 from app.models.message import Message
 from app.models.historical_summary import HistoricalSummary
+from app.models.interaction import Interaction
 from app.schemas.session import (
     SessionCreate,
     SessionUpdate,
     SessionResponse
 )
+from app.services.task.workspace import remove_session_workspace
 from app.utils.crud import CRUDBase
 from app.logger import logger
 
@@ -70,9 +72,11 @@ def delete_session(
     Delete a session and all its associated data.
     
     This endpoint handles cascade deletion at the application layer:
-    1. Delete all historical summaries for the session
-    2. Delete all messages for the session
-    3. Delete the session itself
+    1. Delete all interactions for the session
+    2. Delete all historical summaries for the session
+    3. Delete all messages for the session
+    4. Delete the session itself
+    5. Remove the session workspace directory
     
     This follows the project rule: data constraints should be handled
     at the application layer, not at the database layer.
@@ -81,6 +85,12 @@ def delete_session(
     
     # Verify session exists
     session = crud.get(db, session_id)
+    
+    # Delete interactions (application-layer cascade)
+    deleted_interactions = db.query(Interaction).filter(
+        Interaction.session_id == session_id
+    ).delete()
+    logger.info(f"Deleted {deleted_interactions} interactions for session {session_id}")
     
     # Delete historical summaries (application-layer cascade)
     deleted_summaries = db.query(HistoricalSummary).filter(
@@ -97,6 +107,10 @@ def delete_session(
     # Delete the session itself
     db.delete(session)
     db.commit()
+    
+    # Remove workspace directory
+    if remove_session_workspace(session_id):
+        logger.info(f"Removed workspace directory for session {session_id}")
     
     logger.info(f"Session {session_id} deleted successfully")
     return {"message": "Session deleted successfully"}

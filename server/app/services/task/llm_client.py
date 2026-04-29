@@ -1,5 +1,5 @@
 """
-LLM client for the agent system.
+LLM client for the task system.
 
 Wraps LangChain's ChatOpenAI with tool binding support.
 Uses ainvoke (non-streaming) for complete response parsing,
@@ -17,9 +17,9 @@ from app.models.llm_config import LLMConfig
 from app.logger import logger
 
 
-class AgentLLMClient:
+class TaskLLMClient:
     """
-    LLM client tailored for the agent's ReAct loop.
+    LLM client tailored for the task's ReAct loop.
 
     Supports:
     - Tool binding via OpenAI function calling
@@ -29,7 +29,7 @@ class AgentLLMClient:
 
     def __init__(self, llm_config: LLMConfig, tool_schemas: List[Dict[str, Any]]):
         """
-        Initialize the agent LLM client.
+        Initialize the task LLM client.
 
         Args:
             llm_config: LLM configuration (model, API key, base URL).
@@ -54,7 +54,7 @@ class AgentLLMClient:
             self._chat_model = self._chat_model.bind_tools(tool_schemas)
 
         logger.info(
-            f"AgentLLMClient initialized: model={llm_config.model_id}, "
+            f"TaskLLMClient initialized: model={llm_config.model_id}, "
             f"tools={len(tool_schemas)}"
         )
 
@@ -80,7 +80,7 @@ class AgentLLMClient:
             for m in messages
         ]
         logger.debug(
-            f"AgentLLMClient invoking with {len(messages)} messages, "
+            f"TaskLLMClient invoking with {len(messages)} messages, "
             f"detail: {msg_summary}"
         )
 
@@ -96,7 +96,7 @@ class AgentLLMClient:
                     for tc in tool_calls
                 ]
                 logger.debug(
-                    f"AgentLLMClient response: finish_reason=tool_calls, "
+                    f"TaskLLMClient response: finish_reason=tool_calls, "
                     f"content={repr(response.content[:500] if response.content else '')}, "
                     f"tool_calls={tc_summary}"
                 )
@@ -112,7 +112,7 @@ class AgentLLMClient:
 
             if finish_reason == "length":
                 logger.debug(
-                    f"AgentLLMClient response: finish_reason=length, "
+                    f"TaskLLMClient response: finish_reason=length, "
                     f"content={repr(response.content[:500] if response.content else '')}"
                 )
                 return {
@@ -122,7 +122,7 @@ class AgentLLMClient:
                 }
 
             logger.debug(
-                f"AgentLLMClient response: finish_reason=stop, "
+                f"TaskLLMClient response: finish_reason=stop, "
                 f"content={repr(response.content[:500] if response.content else '')}"
             )
             return {
@@ -132,7 +132,7 @@ class AgentLLMClient:
             }
 
         except Exception as e:
-            logger.error(f"AgentLLMClient invoke error: {str(e)}", exc_info=True)
+            logger.error(f"TaskLLMClient invoke error: {str(e)}", exc_info=True)
             raise
 
     async def close(self) -> None:

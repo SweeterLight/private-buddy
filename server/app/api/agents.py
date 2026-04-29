@@ -13,12 +13,14 @@ from app.models.agent import Agent
 from app.models.session import Session as SessionModel
 from app.models.message import Message
 from app.models.historical_summary import HistoricalSummary
+from app.models.interaction import Interaction
 from app.schemas.agent import (
     AgentCreate,
     AgentUpdate,
     AgentResponse,
     AgentWithSessions
 )
+from app.services.task.workspace import remove_session_workspace
 from app.utils.crud import CRUDBase
 from app.logger import logger
 
@@ -109,9 +111,10 @@ def delete_agent(
     
     This endpoint handles cascade deletion at the application layer:
     1. Find all sessions for this agent
-    2. For each session, delete historical summaries and messages
+    2. For each session, delete interactions, historical summaries and messages
     3. Delete all sessions for this agent
-    4. Delete the agent itself
+    4. Remove workspace directories for all sessions
+    5. Delete the agent itself
     
     This follows the project rule: data constraints should be handled
     at the application layer, not at the database layer.
@@ -127,6 +130,12 @@ def delete_agent(
     ).all()]
     
     if session_ids:
+        # Delete interactions for all sessions
+        deleted_interactions = db.query(Interaction).filter(
+            Interaction.session_id.in_(session_ids)
+        ).delete(synchronize_session=False)
+        logger.info(f"Deleted {deleted_interactions} interactions for agent {agent_id}")
+        
         # Delete historical summaries for all sessions
         deleted_summaries = db.query(HistoricalSummary).filter(
             HistoricalSummary.session_id.in_(session_ids)
@@ -144,6 +153,11 @@ def delete_agent(
             SessionModel.agent_id == agent_id
         ).delete()
         logger.info(f"Deleted {deleted_sessions} sessions for agent {agent_id}")
+        
+        # Remove workspace directories for all sessions
+        for sid in session_ids:
+            if remove_session_workspace(sid):
+                logger.info(f"Removed workspace directory for session {sid}")
     
     # Delete the agent itself
     db.delete(agent)

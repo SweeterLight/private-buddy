@@ -485,7 +485,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
                           <div style={{ fontSize: '12px', marginBottom: '4px' }}>
                             <span style={{ color: typeColor, fontWeight: 500 }}>{typeLabel}</span>
                             <span style={{ color: '#9ca3af', marginLeft: '8px' }}>
-                              {new Date(interaction.timestamp).toLocaleTimeString()}
+                              {new Date(interaction.updated_at).toLocaleTimeString()}
                             </span>
                           </div>
                           <pre style={{

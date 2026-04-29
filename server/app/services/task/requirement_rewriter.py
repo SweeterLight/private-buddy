@@ -21,7 +21,6 @@ from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
 from app.models.llm_config import LLMConfig
-from app.services.llm.llm_logger import TokenUsageLogger
 from app.logger import logger
 
 
@@ -149,7 +148,7 @@ Output a JSON object with:
         
         try:
             messages = [HumanMessage(content=prompt)]
-            result = await structured_model.ainvoke(messages, config={"callbacks": [TokenUsageLogger()]})
+            result = await structured_model.ainvoke(messages)
             
             logger.info(f"Task requirement rewritten: '{user_message[:50]}...' -> '{result.requirement[:50]}...'")
             if result.context_summary:
