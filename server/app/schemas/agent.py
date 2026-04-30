@@ -16,6 +16,7 @@ class AgentBase(BaseModel):
     llm_config_id: int
     embedding_config_id: int = 0
     description: str = ""
+    avatar: str = ""
 
 
 class AgentCreate(AgentBase):
@@ -30,6 +31,7 @@ class AgentUpdate(BaseModel):
     llm_config_id: Optional[int] = None
     embedding_config_id: Optional[int] = None
     description: Optional[str] = None
+    avatar: Optional[str] = None
 
 
 class AgentResponse(AgentBase):

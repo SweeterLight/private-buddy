@@ -1,7 +1,6 @@
 import { useState } from 'react';
-import { Button, Dropdown } from 'antd';
-import type { MenuProps } from 'antd';
-import { SettingOutlined, RobotOutlined, UserOutlined, PlusOutlined, GlobalOutlined, CheckOutlined, ApiOutlined, ArrowLeftOutlined, SearchOutlined } from '@ant-design/icons';
+import { Button } from 'antd';
+import { SettingOutlined, PlusOutlined, ArrowLeftOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { changeLanguage, getCurrentLanguage } from './i18n';
 import AgentList from './components/AgentList';
@@ -10,15 +9,25 @@ import LLMConfigList from './components/LLMConfigList';
 import EmbeddingConfigList from './components/EmbeddingConfigList';
 import AgentConfig from './components/AgentConfig';
 import SearchConfigForm from './components/SearchConfigForm';
+import { ConfigIcon } from './components/AgentAvatar';
+import type { IconType } from './components/AgentAvatar';
 import type { Session, LLMConfig, EmbeddingConfig } from './types';
 import './App.css';
 
-type MainView = 'chat' | 'agent' | 'llm' | 'embedding' | 'search';
+type RightPanelView = null | 'settings-overview' | 'settings-agent' | 'settings-llm' | 'settings-embedding' | 'settings-search' | 'settings-language';
+
+const SETTINGS_CARDS: { key: string; iconType: IconType }[] = [
+  { key: 'settings-agent', iconType: 'agent' },
+  { key: 'settings-llm', iconType: 'llm' },
+  { key: 'settings-embedding', iconType: 'embedding' },
+  { key: 'settings-search', iconType: 'search' },
+  { key: 'settings-language', iconType: 'language' },
+];
 
 function App() {
   const { t } = useTranslation();
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
-  const [mainView, setMainView] = useState<MainView>('chat');
+  const [rightPanelView, setRightPanelView] = useState<RightPanelView>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [showCreateAgent, setShowCreateAgent] = useState(false);
   const [showCreateLLM, setShowCreateLLM] = useState(false);
@@ -27,7 +36,6 @@ function App() {
 
   const handleSelectSession = (session: Session | null) => {
     setCurrentSession(session);
-    setMainView('chat');
   };
 
   const handleSelectLLMConfig = (config: LLMConfig | null) => {
@@ -53,7 +61,6 @@ function App() {
       updated_at: new Date().toISOString(),
     };
     setCurrentSession(tempSession);
-    setMainView('chat');
   };
 
   const handleLanguageChange = (lang: string) => {
@@ -65,87 +72,88 @@ function App() {
     setRefreshKey(prev => prev + 1);
   };
 
-  const switchToChat = () => {
-    setMainView('chat');
+  const settingsLabelMap: Record<string, string> = {
+    'settings-agent': t('settings.agentConfig'),
+    'settings-llm': t('settings.llmConfig'),
+    'settings-embedding': t('settings.embeddingConfig'),
+    'settings-search': t('settings.searchConfig'),
+    'settings-language': t('settings.language'),
   };
 
-  const languageMenuItems: MenuProps['items'] = [
-    {
-      key: 'zh',
-      label: (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', minWidth: '100px' }}>
-          <span>中文</span>
-          {currentLang === 'zh' && <CheckOutlined style={{ color: '#1890ff' }} />}
-        </div>
-      ),
-      onClick: () => handleLanguageChange('zh')
-    },
-    {
-      key: 'en',
-      label: (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', minWidth: '100px' }}>
-          <span>English</span>
-          {currentLang === 'en' && <CheckOutlined style={{ color: '#1890ff' }} />}
-        </div>
-      ),
-      onClick: () => handleLanguageChange('en')
-    }
-  ];
+  const isSettingsOpen = rightPanelView !== null;
 
-  const settingsMenuItems: MenuProps['items'] = [
-    {
-      key: 'agent',
-      label: t('settings.agentConfig'),
-      icon: <UserOutlined />,
-      onClick: () => setMainView('agent')
-    },
-    {
-      key: 'llm',
-      label: t('settings.llmConfig'),
-      icon: <RobotOutlined />,
-      onClick: () => setMainView('llm')
-    },
-    {
-      key: 'embedding',
-      label: t('settings.embeddingConfig'),
-      icon: <ApiOutlined />,
-      onClick: () => setMainView('embedding')
-    },
-    {
-      key: 'search',
-      label: t('settings.searchConfig'),
-      icon: <SearchOutlined />,
-      onClick: () => setMainView('search')
-    },
-    {
-      key: 'language',
-      label: t('settings.language'),
-      icon: <GlobalOutlined />,
-      children: languageMenuItems
-    }
-  ];
+  const renderSettingsOverview = () => (
+    <div className="panel-overview">
+      <div className="panel-overview-title">{t('settings.title')}</div>
+      <div className="panel-card-grid">
+        {SETTINGS_CARDS.map(({ key, iconType }) => (
+          <div
+            key={key}
+            className="panel-card"
+            onClick={() => setRightPanelView(key as RightPanelView)}
+          >
+            <ConfigIcon type={iconType} size={48} iconSize={22} borderRadius="12px" marginBottom={12} />
+            <div className="panel-card-label">{settingsLabelMap[key]}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 
-  const renderMainContent = () => {
-    switch (mainView) {
-      case 'agent':
+  const renderLanguagePanel = () => (
+    <div className="panel-detail">
+      <div className="panel-detail-header">
+        <Button
+          type="text"
+          icon={<ArrowLeftOutlined />}
+          onClick={() => setRightPanelView('settings-overview')}
+          style={{ color: 'var(--color-text-secondary)' }}
+        />
+        <span className="panel-detail-title">{t('settings.language')}</span>
+      </div>
+      <div className="panel-detail-body">
+        <div className="lang-options">
+          <div
+            className={`lang-option-card ${currentLang === 'zh' ? 'active' : ''}`}
+            onClick={() => handleLanguageChange('zh')}
+          >
+            <span className="lang-option-text">中文</span>
+          </div>
+          <div
+            className={`lang-option-card ${currentLang === 'en' ? 'active' : ''}`}
+            onClick={() => handleLanguageChange('en')}
+          >
+            <span className="lang-option-text">English</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderRightPanel = () => {
+    switch (rightPanelView) {
+      case 'settings-overview':
+        return renderSettingsOverview();
+
+      case 'settings-agent':
         return (
-          <div className="main-panel">
-            <div className="main-panel-header">
+          <div className="panel-detail">
+            <div className="panel-detail-header">
               <Button
                 type="text"
                 icon={<ArrowLeftOutlined />}
-                onClick={switchToChat}
-                style={{ color: '#6b7280' }}
+                onClick={() => setRightPanelView('settings-overview')}
+                style={{ color: 'var(--color-text-secondary)' }}
               />
-              <span className="main-panel-title">{t('agent.title')}</span>
+              <span className="panel-detail-title">{t('agent.title')}</span>
               <Button
                 type="text"
                 icon={<PlusOutlined />}
                 onClick={() => setShowCreateAgent(true)}
-                style={{ color: '#6b7280' }}
+                style={{ color: 'var(--color-text-secondary)' }}
               />
             </div>
-            <div className="main-panel-body">
+            <div className="panel-detail-body">
               <AgentConfig
                 showCreate={showCreateAgent}
                 onCreateClose={() => setShowCreateAgent(false)}
@@ -155,25 +163,25 @@ function App() {
           </div>
         );
 
-      case 'llm':
+      case 'settings-llm':
         return (
-          <div className="main-panel">
-            <div className="main-panel-header">
+          <div className="panel-detail">
+            <div className="panel-detail-header">
               <Button
                 type="text"
                 icon={<ArrowLeftOutlined />}
-                onClick={switchToChat}
-                style={{ color: '#6b7280' }}
+                onClick={() => setRightPanelView('settings-overview')}
+                style={{ color: 'var(--color-text-secondary)' }}
               />
-              <span className="main-panel-title">{t('llmConfig.title')}</span>
+              <span className="panel-detail-title">{t('llmConfig.title')}</span>
               <Button
                 type="text"
                 icon={<PlusOutlined />}
                 onClick={() => setShowCreateLLM(true)}
-                style={{ color: '#6b7280' }}
+                style={{ color: 'var(--color-text-secondary)' }}
               />
             </div>
-            <div className="main-panel-body">
+            <div className="panel-detail-body">
               <LLMConfigList
                 onSelectConfig={handleSelectLLMConfig}
                 showCreate={showCreateLLM}
@@ -183,25 +191,25 @@ function App() {
           </div>
         );
 
-      case 'embedding':
+      case 'settings-embedding':
         return (
-          <div className="main-panel">
-            <div className="main-panel-header">
+          <div className="panel-detail">
+            <div className="panel-detail-header">
               <Button
                 type="text"
                 icon={<ArrowLeftOutlined />}
-                onClick={switchToChat}
-                style={{ color: '#6b7280' }}
+                onClick={() => setRightPanelView('settings-overview')}
+                style={{ color: 'var(--color-text-secondary)' }}
               />
-              <span className="main-panel-title">{t('embeddingConfig.title')}</span>
+              <span className="panel-detail-title">{t('embeddingConfig.title')}</span>
               <Button
                 type="text"
                 icon={<PlusOutlined />}
                 onClick={() => setShowCreateEmbedding(true)}
-                style={{ color: '#6b7280' }}
+                style={{ color: 'var(--color-text-secondary)' }}
               />
             </div>
-            <div className="main-panel-body">
+            <div className="panel-detail-body">
               <EmbeddingConfigList
                 onSelectConfig={handleSelectEmbeddingConfig}
                 showCreate={showCreateEmbedding}
@@ -211,44 +219,50 @@ function App() {
           </div>
         );
 
-      case 'search':
+      case 'settings-search':
         return (
-          <div className="main-panel">
-            <div className="main-panel-header">
+          <div className="panel-detail">
+            <div className="panel-detail-header">
               <Button
                 type="text"
                 icon={<ArrowLeftOutlined />}
-                onClick={switchToChat}
-                style={{ color: '#6b7280' }}
+                onClick={() => setRightPanelView('settings-overview')}
+                style={{ color: 'var(--color-text-secondary)' }}
               />
-              <span className="main-panel-title">{t('searchConfig.title')}</span>
+              <span className="panel-detail-title">{t('searchConfig.title')}</span>
             </div>
-            <div className="main-panel-body">
+            <div className="panel-detail-body">
               <SearchConfigForm />
             </div>
           </div>
         );
 
-      case 'chat':
+      case 'settings-language':
+        return renderLanguagePanel();
+
       default:
-        return (
-          <div className="chat-container">
-            <ChatWindow
-              session={currentSession}
-              onSessionCreated={(sessionId) => {
-                setRefreshKey(prev => prev + 1);
-                setCurrentSession(prev => prev ? { ...prev, id: sessionId } : null);
-              }}
-            />
-          </div>
-        );
+        return null;
     }
   };
 
   return (
     <div className="app-container">
       <header className="app-header">
-        <div className="app-logo">Private Buddy</div>
+        <div className="app-logo">
+          <img src="/favicon.svg" alt="logo" className="app-logo-img" />
+          Private Buddy
+        </div>
+        <div className="app-header-actions">
+          <Button
+            type="text"
+            icon={<SettingOutlined />}
+            onClick={() => setRightPanelView(isSettingsOpen ? null : 'settings-overview')}
+            style={{
+              color: isSettingsOpen ? 'var(--color-active)' : 'var(--color-text-secondary)',
+              fontSize: '18px',
+            }}
+          />
+        </div>
       </header>
 
       <div className="app-body">
@@ -259,33 +273,25 @@ function App() {
             onSelectSession={handleSelectSession}
             onCreateSession={handleCreateSession}
           />
-          <div style={{ padding: '12px', borderTop: '1px solid #f3f4f6' }}>
-            <Dropdown
-              menu={{ items: settingsMenuItems }}
-              trigger={['click']}
-              placement="topLeft"
-            >
-              <Button
-                type="text"
-                icon={<SettingOutlined />}
-                block
-                style={{
-                  borderRadius: '8px',
-                  height: '40px',
-                  justifyContent: 'flex-start',
-                  color: ['agent', 'llm', 'embedding'].includes(mainView) ? '#1890ff' : '#6b7280',
-                  backgroundColor: ['agent', 'llm', 'embedding'].includes(mainView) ? '#e6f7ff' : 'transparent',
-                }}
-              >
-                {t('settings.title')}
-              </Button>
-            </Dropdown>
-          </div>
         </aside>
 
-        <main className="app-main">
-          {renderMainContent()}
-        </main>
+        <div className="app-content">
+          <div className="app-chat-area">
+            <ChatWindow
+              session={currentSession}
+              onSessionCreated={(sessionId) => {
+                setRefreshKey(prev => prev + 1);
+                setCurrentSession(prev => prev ? { ...prev, id: sessionId } : null);
+              }}
+            />
+          </div>
+
+          {rightPanelView && (
+            <div className="app-right-panel">
+              {renderRightPanel()}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

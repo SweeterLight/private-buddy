@@ -2,6 +2,7 @@ import axios from 'axios';
 import type { Session, Message, LLMConfig, EmbeddingConfig, Agent, AgentWithSessions, Interaction, SearchConfig } from '../types';
 
 export const API_BASE_URL = 'http://localhost:8000/api';
+export const SERVER_BASE_URL = 'http://localhost:8000';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -61,4 +62,19 @@ export const interactionApi = {
 export const searchConfigApi = {
   get: () => api.get<SearchConfig>('/search-config'),
   update: (data: Partial<SearchConfig>) => api.put<SearchConfig>('/search-config', data),
+};
+
+export const uploadApi = {
+  uploadAvatar: (agentId: number, file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post<{ filename: string }>(`/uploads/avatar?agent_id=${agentId}`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+};
+
+export const getAvatarUrl = (avatar: string) => {
+  if (!avatar) return '';
+  return `${SERVER_BASE_URL}/avatars/${avatar}`;
 };

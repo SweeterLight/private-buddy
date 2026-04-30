@@ -20,7 +20,7 @@ from app.schemas.agent import (
     AgentResponse,
     AgentWithSessions
 )
-from app.services.task.workspace import remove_session_workspace
+from app.services.task.workspace import remove_session_workspace, get_avatars_dir
 from app.utils.crud import CRUDBase
 from app.logger import logger
 
@@ -74,6 +74,7 @@ def list_agents_with_sessions(
             llm_config_id=agent.llm_config_id,
             embedding_config_id=agent.embedding_config_id,
             description=agent.description,
+            avatar=agent.avatar,
             created_at=agent.created_at,
             updated_at=agent.updated_at,
             sessions=sessions_by_agent.get(agent.id, [])
@@ -123,6 +124,13 @@ def delete_agent(
     
     # Verify agent exists
     agent = crud.get(db, agent_id)
+    
+    # Clean up avatar file if exists
+    if agent.avatar:
+        avatar_path = get_avatars_dir() / agent.avatar
+        if avatar_path.exists():
+            avatar_path.unlink()
+            logger.info(f"Removed avatar file: {agent.avatar}")
     
     # Find all sessions for this agent
     session_ids = [s.id for s in db.query(SessionModel).filter(

@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Modal, Form, Input, message, Select } from 'antd';
-import { EditOutlined, DeleteOutlined, RobotOutlined } from '@ant-design/icons';
+import { Button, Modal, Form, Input, message, Select, Upload } from 'antd';
+import { EditOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import type { Agent, LLMConfig, EmbeddingConfig } from '../types';
-import { agentApi, llmConfigApi, embeddingConfigApi } from '../services/api';
+import { agentApi, llmConfigApi, embeddingConfigApi, uploadApi } from '../services/api';
 import { logger } from '../logger';
 import { confirmDelete } from '../utils/confirm';
+import AgentAvatar from './AgentAvatar';
 
 interface AgentConfigProps {
   showCreate?: boolean;
@@ -24,6 +25,10 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [form] = Form.useForm();
   const [editForm] = Form.useForm();
+  const [createAvatarFile, setCreateAvatarFile] = useState<File | null>(null);
+  const [createAvatarPreview, setCreateAvatarPreview] = useState<string>('');
+  const [editAvatarFile, setEditAvatarFile] = useState<File | null>(null);
+  const [editAvatarPreview, setEditAvatarPreview] = useState<string>('');
 
   const loadAgents = async () => {
     setLoading(true);
@@ -70,6 +75,8 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
   const handleModalClose = () => {
     setModalVisible(false);
     form.resetFields();
+    setCreateAvatarFile(null);
+    setCreateAvatarPreview('');
     if (onCreateClose) {
       onCreateClose();
     }
@@ -78,9 +85,22 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
   const handleCreateAgent = async (values: Record<string, unknown>) => {
     try {
       const response = await agentApi.create(values);
-      setAgents([response.data, ...agents]);
+      const newAgent = response.data;
+
+      if (createAvatarFile) {
+        try {
+          const uploadRes = await uploadApi.uploadAvatar(newAgent.id, createAvatarFile);
+          newAgent.avatar = uploadRes.data.filename;
+        } catch (error) {
+          logger.error('Failed to upload avatar:', error);
+        }
+      }
+
+      setAgents([newAgent, ...agents]);
       setModalVisible(false);
       form.resetFields();
+      setCreateAvatarFile(null);
+      setCreateAvatarPreview('');
       message.success(t('agent.createSuccess'));
       if (onAgentCreated) {
         onAgentCreated();
@@ -93,9 +113,21 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
 
   const handleUpdateAgent = async (values: Record<string, unknown>) => {
     if (!editingAgent) return;
-    
+
     try {
-      const response = await agentApi.update(editingAgent.id, values);
+      let avatarFilename = editingAgent.avatar;
+
+      if (editAvatarFile) {
+        try {
+          const uploadRes = await uploadApi.uploadAvatar(editingAgent.id, editAvatarFile);
+          avatarFilename = uploadRes.data.filename;
+        } catch (error) {
+          logger.error('Failed to upload avatar:', error);
+        }
+      }
+
+      const updateData = { ...values, avatar: avatarFilename };
+      const response = await agentApi.update(editingAgent.id, updateData);
       const index = agents.findIndex(a => a.id === editingAgent.id);
       if (index !== -1) {
         const newAgents = [...agents];
@@ -105,6 +137,8 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
       setEditModalVisible(false);
       editForm.resetFields();
       setEditingAgent(null);
+      setEditAvatarFile(null);
+      setEditAvatarPreview('');
       message.success(t('agent.updateSuccess'));
     } catch (error) {
       logger.error('Failed to update agent:', error);
@@ -114,7 +148,7 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
 
   const handleDeleteAgent = async (agentId: number, e: React.MouseEvent) => {
     e.stopPropagation();
-    
+
     confirmDelete({
       title: t('agent.confirmDeleteTitle'),
       content: t('agent.confirmDelete'),
@@ -135,6 +169,8 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
 
   const handleEditAgent = (agent: Agent) => {
     setEditingAgent(agent);
+    setEditAvatarFile(null);
+    setEditAvatarPreview('');
     editForm.setFieldsValue({
       name: agent.name,
       character_settings: agent.character_settings || '',
@@ -145,53 +181,94 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
     setEditModalVisible(true);
   };
 
+  const renderAvatarUpload = (
+    setAvatarFile: (f: File | null) => void,
+    setAvatarPreview: (url: string) => void,
+    currentAvatar?: string,
+    previewUrl?: string,
+  ) => {
+    const showImage = previewUrl || currentAvatar;
+
+    return (
+      <Upload
+        accept=".jpg,.jpeg,.png,.webp"
+        showUploadList={false}
+        beforeUpload={(file) => {
+          setAvatarFile(file);
+          setAvatarPreview(URL.createObjectURL(file));
+          return false;
+        }}
+      >
+        {showImage ? (
+          <div className="avatar-upload-preview">
+            {previewUrl ? (
+              <img
+                src={previewUrl}
+                alt="preview"
+                className="avatar-upload-preview-img"
+              />
+            ) : (
+              <AgentAvatar
+                avatar={currentAvatar || ''}
+                size={64}
+                borderRadius="50%"
+                iconSize={28}
+              />
+            )}
+            <div className="avatar-upload-overlay">
+              <PlusOutlined />
+            </div>
+          </div>
+        ) : (
+          <div className="avatar-upload-trigger">
+            <PlusOutlined style={{ fontSize: '20px', color: 'var(--color-text-placeholder)' }} />
+            <div style={{ marginTop: '4px', fontSize: '12px', color: 'var(--color-text-placeholder)' }}>
+              {t('agent.avatarUpload')}
+            </div>
+          </div>
+        )}
+      </Upload>
+    );
+  };
+
   return (
     <>
-      <div>
+      <div className="agent-card-grid">
         {loading ? (
-          <div style={{ textAlign: 'center', padding: '40px', color: '#9ca3af' }}>
+          <div className="empty-state-text">
             {t('sidebar.loading')}
           </div>
         ) : agents.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '40px', color: '#9ca3af' }}>
+          <div className="empty-state-text">
             {t('sidebar.noAgent')}
           </div>
         ) : (
           agents.map((agent) => (
             <div
               key={agent.id}
-              className="session-item"
-              style={{ cursor: 'default', padding: '12px 16px' }}
+              className="agent-card agent-card-block"
             >
-              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="session-title">
-                    <RobotOutlined style={{ marginRight: '8px', fontSize: '12px' }} />
-                    {agent.name}
-                  </div>
-                  <div style={{ fontSize: '13px', color: '#6b7280', marginTop: '4px' }}>
-                    {agent.description || t('agent.noDescription')}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: '4px', marginLeft: '8px' }}>
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<EditOutlined />}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleEditAgent(agent);
-                    }}
-                    style={{ color: '#6b7280' }}
-                  />
-                  <Button
-                    type="text"
-                    size="small"
-                    danger
-                    icon={<DeleteOutlined />}
-                    onClick={(e) => handleDeleteAgent(agent.id, e)}
-                  />
-                </div>
+              <AgentAvatar avatar={agent.avatar} size={44} iconSize={20} borderRadius="10px" />
+              <div className="agent-card-block-name">{agent.name}</div>
+              <div className="agent-card-block-desc">{agent.description || t('agent.noDescription')}</div>
+              <div className="item-actions agent-card-block-actions">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<EditOutlined />}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleEditAgent(agent);
+                  }}
+                  style={{ color: 'var(--color-text-secondary)' }}
+                />
+                <Button
+                  type="text"
+                  size="small"
+                  danger
+                  icon={<DeleteOutlined />}
+                  onClick={(e) => handleDeleteAgent(agent.id, e)}
+                />
               </div>
             </div>
           ))
@@ -215,6 +292,10 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
           style={{ marginTop: '16px' }}
           initialValues={{ embedding_config_id: 0 }}
         >
+          <Form.Item label={t('agent.avatar')}>
+            {renderAvatarUpload(setCreateAvatarFile, setCreateAvatarPreview, undefined, createAvatarPreview)}
+          </Form.Item>
+
           <Form.Item
             label={t('agent.name')}
             name="name"
@@ -222,27 +303,27 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
           >
             <Input placeholder={t('agent.namePlaceholder')} />
           </Form.Item>
-          
+
           <Form.Item
             label={t('agent.characterSettings')}
             name="character_settings"
           >
-            <Input.TextArea 
-              placeholder={t('agent.characterSettingsPlaceholder')} 
+            <Input.TextArea
+              placeholder={t('agent.characterSettingsPlaceholder')}
               rows={4}
             />
           </Form.Item>
-          
+
           <Form.Item
             label={t('agent.description')}
             name="description"
           >
-            <Input.TextArea 
-              placeholder={t('agent.descriptionPlaceholder')} 
+            <Input.TextArea
+              placeholder={t('agent.descriptionPlaceholder')}
               rows={2}
             />
           </Form.Item>
-          
+
           <Form.Item
             label={t('agent.llmConfigId')}
             name="llm_config_id"
@@ -256,7 +337,7 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
               ))}
             </Select>
           </Form.Item>
-          
+
           <Form.Item
             label={t('agent.embeddingConfigId')}
             name="embedding_config_id"
@@ -283,6 +364,8 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
           setEditModalVisible(false);
           editForm.resetFields();
           setEditingAgent(null);
+          setEditAvatarFile(null);
+          setEditAvatarPreview('');
         }}
         okText={t('common.update')}
         cancelText={t('common.cancel')}
@@ -295,6 +378,15 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
           onFinish={handleUpdateAgent}
           style={{ marginTop: '16px' }}
         >
+          <Form.Item label={t('agent.avatar')}>
+            {renderAvatarUpload(
+              setEditAvatarFile,
+              setEditAvatarPreview,
+              editingAgent?.avatar,
+              editAvatarPreview,
+            )}
+          </Form.Item>
+
           <Form.Item
             label={t('agent.name')}
             name="name"
@@ -302,27 +394,27 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
           >
             <Input placeholder={t('agent.namePlaceholder')} />
           </Form.Item>
-          
+
           <Form.Item
             label={t('agent.characterSettings')}
             name="character_settings"
           >
-            <Input.TextArea 
-              placeholder={t('agent.characterSettingsPlaceholder')} 
+            <Input.TextArea
+              placeholder={t('agent.characterSettingsPlaceholder')}
               rows={4}
             />
           </Form.Item>
-          
+
           <Form.Item
             label={t('agent.description')}
             name="description"
           >
-            <Input.TextArea 
-              placeholder={t('agent.descriptionPlaceholder')} 
+            <Input.TextArea
+              placeholder={t('agent.descriptionPlaceholder')}
               rows={2}
             />
           </Form.Item>
-          
+
           <Form.Item
             label={t('agent.llmConfigId')}
             name="llm_config_id"
@@ -336,7 +428,7 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
               ))}
             </Select>
           </Form.Item>
-          
+
           <Form.Item
             label={t('agent.embeddingConfigId')}
             name="embedding_config_id"

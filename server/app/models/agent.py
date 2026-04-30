@@ -20,6 +20,7 @@ class Agent(Base):
     llm_config_id = Column(Integer, nullable=False, index=True)
     embedding_config_id = Column(Integer, nullable=False, default=0, index=True)
     description = Column(Text, nullable=False, default='')
+    avatar = Column(String(500), nullable=False, default='')  # Relative path under PrivateBuddyData/avatars/
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

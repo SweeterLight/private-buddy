@@ -3,6 +3,11 @@ import { Input, Button, message, Spin, Modal } from 'antd';
 import { RobotOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { Send } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { formatMessageTime } from '../utils/time';
+import LoadingSpinner from './LoadingSpinner';
+import AgentAvatar from './AgentAvatar';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type { Message, Session, Agent, Interaction } from '../types';
 import { HAS_INTERACTIONS_PENDING, HAS_INTERACTIONS_EXISTS, INTERACTION_TYPE_REQUEST } from '../types';
 import { messageApi, sessionApi, agentApi, interactionApi, API_BASE_URL } from '../services/api';
@@ -26,9 +31,11 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
   const [interactionsLoading, setInteractionsLoading] = useState(false);
   const pollingRef = useRef<Map<number, ReturnType<typeof setInterval>>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatMessagesRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const prevSessionIdRef = useRef<number | null>(null);
   const currentLoadIdRef = useRef<number>(0);
+  const isInitialLoadRef = useRef<boolean>(true);
 
   const isTempSession = session?.id === -1;
 
@@ -72,6 +79,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
     if (!isTempToReal) {
       setMessages([]);
       setStreamingMessage('');
+      isInitialLoadRef.current = true;
     }
     setInputValue('');
     
@@ -185,8 +193,24 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
   };
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingMessage]);
+    if (!chatMessagesRef.current) return;
+    
+    if (isInitialLoadRef.current && messages.length > 0) {
+      chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
+      isInitialLoadRef.current = false;
+    } else if (messages.length > 0) {
+      chatMessagesRef.current.scrollTo({
+        top: chatMessagesRef.current.scrollHeight,
+        behavior: 'smooth'
+      });
+    }
+  }, [messages]);
+
+  useEffect(() => {
+    if (!chatMessagesRef.current || !streamingMessage) return;
+    
+    chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
+  }, [streamingMessage]);
 
   const connectToStream = (sessionId: number, loadId?: number) => {
     if (eventSourceRef.current) {
@@ -332,7 +356,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
 
   return (
     <>
-      <div className="chat-messages">
+      <div className="chat-messages" ref={chatMessagesRef}>
         {loading ? (
           <div style={{ textAlign: 'center', padding: '40px' }}>
             <Spin size="large" />
@@ -346,18 +370,27 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
                   <div className="message-header">
                     {msg.role === 'user' ? (
                       <>
-                        <span className="message-time">{msg.updated_at ? new Date(msg.updated_at).toLocaleTimeString() : new Date(msg.created_at).toLocaleTimeString()}</span>
+                        <span className="message-time">{formatMessageTime(new Date(msg.updated_at || msg.created_at))}</span>
                         <span className="message-role">{t('chat.me')}</span>
                       </>
                     ) : (
                       <>
-                        <span className="message-role">{currentAgent?.name || 'AI'}</span>
-                        <span className="message-time">{msg.updated_at ? new Date(msg.updated_at).toLocaleTimeString() : new Date(msg.created_at).toLocaleTimeString()}</span>
+                        <span className="message-role">
+                          <AgentAvatar avatar={currentAgent?.avatar || ''} size={32} iconSize={16} borderRadius="8px" />
+                          {currentAgent?.name || 'AI'}
+                        </span>
+                        <span className="message-time">{formatMessageTime(new Date(msg.updated_at || msg.created_at))}</span>
                       </>
                     )}
                   </div>
                   <div className="message-content">
-                    {msg.content}
+                    {msg.role === 'assistant' ? (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {msg.content}
+                      </ReactMarkdown>
+                    ) : (
+                      msg.content
+                    )}
                   </div>
                   {msg.role === 'assistant' && msg.has_interactions === HAS_INTERACTIONS_EXISTS && (
                     <div style={{ marginTop: '4px' }}>
@@ -377,15 +410,18 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
             {isStreaming && (
               <div className="message-item assistant">
                 <div className="message-header">
-                  <span className="message-role">{currentAgent?.name || 'AI'}</span>
+                  <span className="message-role">
+                    <AgentAvatar avatar={currentAgent?.avatar || ''} size={32} iconSize={16} borderRadius="8px" />
+                    {currentAgent?.name || 'AI'}
+                  </span>
                   <span className="message-time">
-                    <span className="typing-dots">
-                      <span>.</span><span>.</span><span>.</span>
-                    </span>
+                    <LoadingSpinner />
                   </span>
                 </div>
                 <div className="message-content">
-                  {streamingMessage}
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {streamingMessage}
+                  </ReactMarkdown>
                 </div>
               </div>
             )}
@@ -433,7 +469,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
                   padding: 0,
                   backgroundColor: isSendDisabled ? '#d1d5db' : '#1890ff',
                   borderColor: isSendDisabled ? '#d1d5db' : '#1890ff',
-                  color: isSendDisabled ? '#9ca3af' : '#ffffff',
+                  color: isSendDisabled ? 'var(--color-text-placeholder)' : '#ffffff',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center'
@@ -461,7 +497,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
         ) : (
           <div style={{ maxHeight: '600px', overflowY: 'auto' }}>
             {selectedInteractions.length === 0 ? (
-              <div style={{ textAlign: 'center', color: '#9ca3af', padding: '20px' }}>
+              <div style={{ textAlign: 'center', color: 'var(--color-text-placeholder)', padding: '20px' }}>
                 No interaction records found
               </div>
             ) : (
@@ -484,8 +520,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
                         <div key={`interaction-${interaction.id}`} style={{ marginLeft: '16px', marginBottom: '8px' }}>
                           <div style={{ fontSize: '12px', marginBottom: '4px' }}>
                             <span style={{ color: typeColor, fontWeight: 500 }}>{typeLabel}</span>
-                            <span style={{ color: '#9ca3af', marginLeft: '8px' }}>
-                              {new Date(interaction.updated_at).toLocaleTimeString()}
+                            <span style={{ color: 'var(--color-text-placeholder)', marginLeft: '8px' }}>
+                              {formatMessageTime(new Date(interaction.updated_at))}
                             </span>
                           </div>
                           <pre style={{

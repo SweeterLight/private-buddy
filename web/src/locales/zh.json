@@ -12,10 +12,11 @@
     "loading": "加载中..."
   },
   "chat": {
-    "me": "我"
+    "me": "我",
+    "yesterday": "昨天"
   },
   "agent": {
-    "title": "Agent配置",
+    "title": "Agent",
     "create": "新建Agent",
     "edit": "编辑Agent",
     "name": "名称",
@@ -37,7 +38,9 @@
     "deleteSuccess": "删除成功",
     "deleteFailed": "删除失败",
     "confirmDelete": "确定要删除这个Agent吗？",
-    "confirmDeleteTitle": "确认删除"
+    "confirmDeleteTitle": "确认删除",
+    "avatar": "头像",
+    "avatarUpload": "上传"
   },
   "session": {
     "untitled": "未命名会话",
@@ -52,7 +55,7 @@
     "confirmDeleteTitle": "确认删除"
   },
   "llmConfig": {
-    "title": "LLM配置",
+    "title": "LLM",
     "create": "新建LLM配置",
     "edit": "编辑LLM配置",
     "name": "名称",
@@ -76,7 +79,7 @@
     "confirmDeleteTitle": "确认删除"
   },
   "embeddingConfig": {
-    "title": "Embedding配置",
+    "title": "Embedding",
     "create": "新建Embedding配置",
     "edit": "编辑Embedding配置",
     "name": "名称",
@@ -101,14 +104,14 @@
   },
   "settings": {
     "title": "设置",
-    "llmConfig": "LLM配置",
-    "embeddingConfig": "Embedding配置",
-    "agentConfig": "Agent配置",
+    "llmConfig": "LLM",
+    "embeddingConfig": "Embedding",
+    "agentConfig": "Agent",
     "searchConfig": "搜索引擎",
     "language": "语言"
   },
   "searchConfig": {
-    "title": "搜索引擎配置",
+    "title": "搜索引擎",
     "provider": "搜索引擎",
     "apiKey": "API Key",
     "apiKeyPlaceholder": "请输入API密钥",

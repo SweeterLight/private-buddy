@@ -14,6 +14,7 @@ Workspace structure (0.0.5):
                 output/             -- LLM working directory (deliverables + temp files)
             2/                      -- session_id=2 workspace
             ...
+        avatars/                    -- agent avatar images
 
 Design principles:
 - .meta/ is system-managed, LLM should NOT directly modify files here
@@ -58,6 +59,21 @@ def get_workspace_root() -> Path:
     if settings.workspace_root:
         return Path(settings.workspace_root)
     return DEFAULT_DATA_ROOT / "workspace"
+
+
+def get_avatars_dir() -> Path:
+    """
+    Get the avatars directory for agent avatar images.
+
+    Defaults to ~/PrivateBuddyData/avatars. Creates the directory
+    if it does not exist.
+
+    Returns:
+        Path to the avatars directory.
+    """
+    avatars_dir = DEFAULT_DATA_ROOT / "avatars"
+    avatars_dir.mkdir(parents=True, exist_ok=True)
+    return avatars_dir
 
 
 def get_session_workspace(session_id: int) -> Path:

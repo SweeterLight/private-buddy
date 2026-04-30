@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { Button, Modal, message, Collapse, Input } from 'antd';
-import { DeleteOutlined, MessageOutlined, RobotOutlined, EditOutlined } from '@ant-design/icons';
+import { DeleteOutlined, MessageOutlined, EditOutlined } from '@ant-design/icons';
 import { MessageCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { AgentWithSessions, Session, SessionBrief } from '../types';
 import { agentApi, sessionApi } from '../services/api';
 import { logger } from '../logger';
 import { confirmDelete } from '../utils/confirm';
+import AgentAvatar from './AgentAvatar';
 
 interface AgentListProps {
   currentSessionId: number | null;
@@ -126,11 +127,11 @@ const AgentList: React.FC<AgentListProps> = ({ currentSessionId, onSelectSession
   return (
     <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
       {loading ? (
-        <div style={{ textAlign: 'center', padding: '20px', color: '#9ca3af' }}>
+        <div style={{ textAlign: 'center', padding: '20px', color: 'var(--color-text-placeholder)' }}>
           {t('sidebar.loading')}
         </div>
       ) : agents.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '20px', color: '#9ca3af' }}>
+        <div style={{ textAlign: 'center', padding: '20px', color: 'var(--color-text-placeholder)' }}>
           {t('sidebar.noAgent')}
         </div>
       ) : (
@@ -138,9 +139,9 @@ const AgentList: React.FC<AgentListProps> = ({ currentSessionId, onSelectSession
           activeKey={activeKeys}
           onChange={(keys) => setActiveKeys(keys as string[])}
           ghost
-          expandIconPlacement="end"
+          expandIcon={() => null}
           styles={{
-            header: { padding: '10px 12px' },
+            header: { padding: '8px 12px' },
             body: { padding: '0 12px 4px 12px' }
           }}
           items={agents.map(agent => ({
@@ -152,8 +153,8 @@ const AgentList: React.FC<AgentListProps> = ({ currentSessionId, onSelectSession
                 onMouseLeave={() => setHoveredAgentId(null)}
               >
                 <div style={{ display: 'flex', alignItems: 'center', flex: 1, minWidth: 0 }}>
-                  <RobotOutlined style={{ marginRight: '8px', fontSize: '14px' }} />
-                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <AgentAvatar avatar={agent.avatar} size={32} iconSize={16} borderRadius="8px" />
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginLeft: '10px', fontSize: '14px' }}>
                     {agent.name}
                   </span>
                 </div>
@@ -167,7 +168,7 @@ const AgentList: React.FC<AgentListProps> = ({ currentSessionId, onSelectSession
                       onCreateSession(agent.id);
                     }}
                     style={{ 
-                      color: '#6b7280',
+                      color: 'var(--color-text-secondary)',
                       padding: '4px 8px',
                       height: 'auto'
                     }}
@@ -178,7 +179,7 @@ const AgentList: React.FC<AgentListProps> = ({ currentSessionId, onSelectSession
             children: (
               <div>
                 {agent.sessions.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '8px', color: '#9ca3af', fontSize: '12px' }}>
+                  <div style={{ textAlign: 'center', padding: '8px', color: 'var(--color-text-placeholder)', fontSize: '12px' }}>
                     {t('sidebar.noSession')}
                   </div>
                 ) : (
@@ -192,7 +193,7 @@ const AgentList: React.FC<AgentListProps> = ({ currentSessionId, onSelectSession
                     >
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                         <div style={{ display: 'flex', alignItems: 'center', flex: 1, minWidth: 0 }}>
-                          <MessageOutlined style={{ marginRight: '6px', fontSize: '12px', color: '#9ca3af' }} />
+                          <MessageOutlined style={{ marginRight: '6px', fontSize: '12px', color: 'var(--color-text-placeholder)' }} />
                           <span style={{ 
                             overflow: 'hidden', 
                             textOverflow: 'ellipsis', 
@@ -209,7 +210,7 @@ const AgentList: React.FC<AgentListProps> = ({ currentSessionId, onSelectSession
                               size="small"
                               icon={<EditOutlined />}
                               onClick={(e) => handleEditSession(session, e)}
-                              style={{ color: '#6b7280', padding: '2px 4px', height: 'auto', minWidth: 'auto' }}
+                              style={{ color: 'var(--color-text-secondary)', padding: '2px 4px', height: 'auto', minWidth: 'auto' }}
                             />
                             <Button
                               type="text"

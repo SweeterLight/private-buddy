@@ -1,7 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from app.database import engine, Base
-from app.api import llm_configs, sessions, messages, chat, agents, embedding_configs, interactions, search_config
+from app.api import llm_configs, sessions, messages, chat, agents, embedding_configs, interactions, search_config, uploads
+from app.services.task.workspace import get_avatars_dir
 from app.logger import logger
 
 Base.metadata.create_all(bind=engine)
@@ -28,6 +30,9 @@ app.include_router(chat.router)
 app.include_router(agents.router)
 app.include_router(interactions.router)
 app.include_router(search_config.router)
+app.include_router(uploads.router)
+
+app.mount("/avatars", StaticFiles(directory=str(get_avatars_dir())), name="avatars")
 
 
 @app.get("/")

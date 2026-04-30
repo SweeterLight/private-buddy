@@ -51,6 +51,7 @@ export interface Agent {
   llm_config_id: number;
   embedding_config_id: number;
   description: string;
+  avatar: string;
   created_at: string;
   updated_at: string | null;
 }

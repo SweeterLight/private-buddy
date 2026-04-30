@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Button, Modal, Input, message, Form } from 'antd';
-import { DeleteOutlined, EditOutlined, ApiOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import type { LLMConfig } from '../types';
 import { llmConfigApi } from '../services/api';
 import { logger } from '../logger';
 import { confirmDelete } from '../utils/confirm';
+import { ConfigIcon } from './AgentAvatar';
 
 interface LLMConfigListProps {
   onSelectConfig?: (config: LLMConfig | null) => void;
@@ -134,31 +135,26 @@ const LLMConfigList: React.FC<LLMConfigListProps> = ({ onSelectConfig, showCreat
     <>
       <div>
         {loading ? (
-          <div style={{ textAlign: 'center', padding: '40px', color: '#9ca3af' }}>
+          <div className="empty-state-text">
             {t('sidebar.loading')}
           </div>
         ) : configs.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '40px', color: '#9ca3af' }}>
+          <div className="empty-state-text">
             {t('llmConfig.noConfig')}
           </div>
       ) : (
         configs.map((config) => (
           <div
             key={config.id}
-            className="session-item"
-            style={{ cursor: 'default', padding: '12px 16px' }}
+            className="agent-card"
           >
-            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="session-title">
-                  <ApiOutlined style={{ marginRight: '8px', fontSize: '12px' }} />
-                  {config.name}
-                </div>
-                <div style={{ fontSize: '13px', color: '#6b7280', marginTop: '4px' }}>
-                  {config.model_id}
-                </div>
+            <div className="agent-card-header">
+              <ConfigIcon type="llm" />
+              <div className="agent-card-info">
+                <div className="agent-card-name">{config.name}</div>
+                <div className="agent-card-desc">{config.model_id}</div>
               </div>
-              <div style={{ display: 'flex', gap: '4px', marginLeft: '8px' }}>
+              <div className="item-actions">
                 <Button
                   type="text"
                   size="small"
@@ -167,7 +163,7 @@ const LLMConfigList: React.FC<LLMConfigListProps> = ({ onSelectConfig, showCreat
                     e.stopPropagation();
                     handleEditConfig(config);
                   }}
-                  style={{ color: '#6b7280' }}
+                  style={{ color: 'var(--color-text-secondary)' }}
                 />
                 <Button
                   type="text"
