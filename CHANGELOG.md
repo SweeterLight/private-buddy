@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.0.8] - 2026-05-01
+
+### Changed
+- **Database Migration: MySQL → SQLite**: replaced MySQL with SQLite for desktop application compatibility, eliminating the need for users to install and configure a database server
+- **Engine Configuration**: removed MySQL-specific `pool_pre_ping` and `pool_recycle`, added SQLite `check_same_thread=False` and WAL mode pragma
+- **SQL Migration Scripts**: consolidated all incremental SQL files (0.0.1 through 0.0.7) into a single `full_init.sql` for fresh database initialization
+- **Database Initialization**: `init_db.sh` now supports `init` (full) and `upgrade` (incremental) modes, uses `sqlite3` client
+- **ORM Models**: removed `comment=` parameters (SQLite does not support column comments); fixed `SearchConfig.updated_at` to be NOT NULL with server_default
+- **Task Loop LLM Configuration**: checkpoint client now uses agent's LLM config instead of separate environment variables, eliminating redundant configuration
+- **Data Directory**: unified all application data under `~/PrivateBuddyData/` (db, chroma, workspace, avatars)
+- **Environment Variables**: simplified to `DATA_ROOT` only; `DATABASE_URL`, `CHROMA_PERSIST_DIR`, and `LLM_*` variables removed
+
+### Removed
+- **pymysql dependency**: no longer needed after SQLite migration
+- **LLM environment variables**: `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY` replaced by database-stored agent LLM configs
+- **migrate_mysql_to_sqlite.py**: one-time migration script deleted after use
+
+### Added
+- **Auto data directory creation**: `PrivateBuddyData/db` directory automatically created on application startup
+- **SQLite PRAGMA configuration**: WAL journal mode and foreign keys enabled on connection
+- **Database Version Tracking**: `db_versions` table and `DBVersion` model for schema version management
+- **Version API**: `GET /api/version` endpoint returns database schema version from `db_versions` table
+- **Upgrade SQL Directory**: `sql/upgrade/` for incremental schema changes in future versions
+
+
 ## [0.0.7] - 2026-05-01
 
 ### Added

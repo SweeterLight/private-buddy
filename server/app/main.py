@@ -2,10 +2,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response
-from app.database import engine, Base
+from app.database import engine, Base, SessionLocal
 from app.api import llm_configs, sessions, messages, chat, agents, embedding_configs, interactions, search_config, uploads
 from app.services.task.workspace import get_avatars_dir
+from app.config import get_settings
 from app.logger import logger
+from app.models.db_version import DBVersion
+import os
 
 
 class CachedStaticFiles(StaticFiles):
@@ -26,12 +29,16 @@ class CachedStaticFiles(StaticFiles):
         
         await super().__call__(scope, receive, send_with_cache)
 
+settings = get_settings()
+db_dir = os.path.join(settings.data_root, 'db')
+os.makedirs(db_dir, exist_ok=True)
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="Private Buddy API",
     description="Private AI Assistant Backend API",
-    version="0.0.4"
+    version="0.0.8"
 )
 
 app.add_middleware(
@@ -63,6 +70,23 @@ app.mount(
 def root():
     logger.info("Root endpoint accessed")
     return {"message": "Private Buddy API is running"}
+
+
+@app.get("/api/version")
+def get_version():
+    """
+    Return the database schema version.
+    
+    Version is read from db_versions table, which tracks schema migrations.
+    Returns '0.0.0' if no version record exists (fresh database).
+    """
+    db = SessionLocal()
+    try:
+        version_record = db.query(DBVersion).order_by(DBVersion.id.desc()).first()
+        version = version_record.version if version_record else "0.0.0"
+        return {"version": version}
+    finally:
+        db.close()
 
 
 @app.on_event("startup")

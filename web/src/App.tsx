@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Button } from 'antd';
+import { useState, useEffect } from 'react';
+import { Button, Tooltip } from 'antd';
 import { SettingOutlined, PlusOutlined, ArrowLeftOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { changeLanguage, getCurrentLanguage } from './i18n';
@@ -10,6 +10,7 @@ import EmbeddingConfigList from './components/EmbeddingConfigList';
 import AgentConfig from './components/AgentConfig';
 import SearchConfigForm from './components/SearchConfigForm';
 import { ConfigIcon } from './components/AgentAvatar';
+import { versionApi } from './services/api';
 import type { IconType } from './components/AgentAvatar';
 import type { Session, LLMConfig, EmbeddingConfig } from './types';
 import './App.css';
@@ -33,6 +34,13 @@ function App() {
   const [showCreateLLM, setShowCreateLLM] = useState(false);
   const [showCreateEmbedding, setShowCreateEmbedding] = useState(false);
   const [currentLang, setCurrentLang] = useState(getCurrentLanguage());
+  const [version, setVersion] = useState<string>('');
+
+  useEffect(() => {
+    versionApi.get()
+      .then(res => setVersion(res.data.version))
+      .catch(() => setVersion(''));
+  }, []);
 
   const handleSelectSession = (session: Session | null) => {
     setCurrentSession(session);
@@ -248,10 +256,12 @@ function App() {
   return (
     <div className="app-container">
       <header className="app-header">
-        <div className="app-logo">
-          <img src="/favicon.svg" alt="logo" className="app-logo-img" />
-          Private Buddy
-        </div>
+        <Tooltip title={version ? `v${version}` : ''} placement="right">
+          <div className="app-logo">
+            <img src="/favicon.svg" alt="logo" className="app-logo-img" />
+            Private Buddy
+          </div>
+        </Tooltip>
         <div className="app-header-actions">
           <Button
             type="text"

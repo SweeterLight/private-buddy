@@ -22,6 +22,7 @@ from typing import Dict, List, Optional
 from sqlalchemy.orm import Session as DBSession
 
 from app.models.interaction import Interaction, INTERACTION_TYPE_REQUEST, INTERACTION_TYPE_RESPONSE
+from app.models.llm_config import LLMConfig
 from app.services.task.llm_client import TaskLLMClient
 from app.services.task.context.manager import ContextManager
 from app.services.task.tools.base import Tool
@@ -57,6 +58,7 @@ class TaskLoop:
     def __init__(
         self,
         llm_client: TaskLLMClient,
+        llm_config: LLMConfig,
         tools: List[Tool],
         context_manager: ContextManager,
         max_iterations: int = DEFAULT_MAX_ITERATIONS,
@@ -70,6 +72,7 @@ class TaskLoop:
 
         Args:
             llm_client: LLM client with tool binding support.
+            llm_config: LLM configuration for creating checkpoint client.
             tools: List of available tools.
             context_manager: ContextManager with window control.
             max_iterations: Maximum number of loop iterations.
@@ -80,6 +83,7 @@ class TaskLoop:
             agent_msg_id: Agent message ID for the delivery target.
         """
         self._llm_client = llm_client
+        self._llm_config = llm_config
         self._tool_registry: Dict[str, Tool] = {t.name: t for t in tools}
         self._context_manager = context_manager
         self._max_iterations = max_iterations
@@ -366,16 +370,8 @@ class TaskLoop:
 
         # Create checkpoint client if not exists
         if not self._checkpoint_client:
-            from app.models.llm_config import LLMConfig
-            from app.config import get_settings
-            settings = get_settings()
-            llm_config = LLMConfig(
-                model_id=settings.llm_model,
-                api_key=settings.llm_api_key,
-                base_url=settings.llm_base_url,
-            )
             self._checkpoint_client = TaskLLMClient(
-                llm_config=llm_config,
+                llm_config=self._llm_config,
                 tool_schemas=[self._write_notes_tool.schema],
             )
 
@@ -541,16 +537,8 @@ After writing notes, you will regain access to all tools."""
 
         # Create checkpoint client if not exists
         if not self._checkpoint_client:
-            from app.models.llm_config import LLMConfig
-            from app.config import get_settings
-            settings = get_settings()
-            llm_config = LLMConfig(
-                model_id=settings.llm_model,
-                api_key=settings.llm_api_key,
-                base_url=settings.llm_base_url,
-            )
             self._checkpoint_client = TaskLLMClient(
-                llm_config=llm_config,
+                llm_config=self._llm_config,
                 tool_schemas=[self._write_notes_tool.schema],
             )
 

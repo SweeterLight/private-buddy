@@ -5,7 +5,8 @@ Private Buddy Server Service - A private AI chat assistant based on FastAPI.
 ## Tech Stack
 
 - **Framework**: FastAPI 0.109.0
-- **Database**: MySQL (SQLAlchemy ORM)
+- **Database**: SQLite (SQLAlchemy ORM)
+- **Vector Store**: ChromaDB
 - **AI**: LangChain + OpenAI
 - **Python**: 3.11+
 
@@ -32,12 +33,14 @@ Copy the environment variable template:
 cp .env.example .env
 ```
 
-Edit the `.env` file to configure database connection and API keys:
+Edit the `.env` file to configure data root and logging:
 
 ```env
-DATABASE_URL=mysql+pymysql://root@localhost:3306/private_buddy
-SECRET_KEY=your-secret-key-here
+DATA_ROOT=/home/user/PrivateBuddyData
+LOG_LEVEL=DEBUG
 ```
+
+> **Note**: `DATA_ROOT` defaults to `~/PrivateBuddyData`. `DATABASE_URL` and `CHROMA_PERSIST_DIR` are derived from `DATA_ROOT` automatically, no need to configure them manually.
 
 ### 3. Initialize Database
 
@@ -48,6 +51,8 @@ cd database
 ./init_db.sh
 ```
 
+This creates the SQLite database at `$HOME/PrivateBuddyData/db/private_buddy.db`.
+
 ### 4. Start Service
 
 ```bash
@@ -55,6 +60,18 @@ cd database
 ```
 
 The service will start at http://localhost:8000.
+
+## Data Directory Structure
+
+All application data is stored under `DATA_ROOT` (defaults to `~/PrivateBuddyData`):
+
+```
+~/PrivateBuddyData/
+    db/                 -- SQLite database (private_buddy.db)
+    chroma/             -- ChromaDB vector store (session_*/...)
+    workspace/          -- Agent task workspace (session_id/...)
+    avatars/            -- Agent avatar images
+```
 
 ## Project Structure
 
@@ -182,10 +199,12 @@ After starting the service, access the API documentation at:
 
 ## Environment Variables
 
-| Variable | Description | Example |
+| Variable | Description | Default |
 |----------|-------------|---------|
-| DATABASE_URL | Database connection string | mysql+pymysql://root@localhost:3306/private_buddy |
-| SECRET_KEY | Application secret key | your-secret-key-here |
+| DATA_ROOT | Root directory for all application data | ~/PrivateBuddyData |
+| LOG_LEVEL | Logging level | INFO |
+
+> **Note**: `DATABASE_URL` and `CHROMA_PERSIST_DIR` are computed from `DATA_ROOT` at runtime. They are not configurable via environment variables.
 
 ## Logging
 
@@ -199,12 +218,9 @@ logs/
 
 ## Database
 
-### Table Structure
+SQLite database file: `~/PrivateBuddyData/db/private_buddy.db`
 
-- **llm_configs**: LLM configuration table
-- **agents**: Agent configuration table
-- **sessions**: Session table
-- **messages**: Message table
+The application uses `Base.metadata.create_all()` to ensure all tables exist on startup, so manual initialization via `init_db.sh` is optional (only needed for a fresh setup).
 
 For detailed information, see [database/README.md](database/README.md)
 
@@ -219,11 +235,11 @@ rm -rf venv
 ./setup.sh
 ```
 
-### Database Connection Issues
+### Database Issues
 
-1. Check if MySQL service is running
-2. Check connection configuration in `.env` file
-3. Check database user permissions
+1. Check if `~/PrivateBuddyData/db/` directory exists and is writable
+2. Re-initialize: `cd database && ./init_db.sh`
+3. Backup: copy `~/PrivateBuddyData/db/private_buddy.db`
 
 ### Port Already in Use
 

@@ -10,8 +10,9 @@ to support both frontend display and debugging.
 """
 
 from sqlalchemy import Column, Integer, Text, DateTime, UniqueConstraint, Index
-from sqlalchemy.sql import func
+from datetime import datetime
 from app.database import Base
+from .base import LOCALTIME
 
 
 INTERACTION_TYPE_REQUEST = 1
@@ -22,14 +23,14 @@ class Interaction(Base):
     __tablename__ = "interactions"
 
     id = Column(Integer, primary_key=True, index=True)
-    session_id = Column(Integer, nullable=False, comment="Owning session")
-    user_msg_id = Column(Integer, nullable=False, comment="User message that triggered execution")
-    agent_msg_id = Column(Integer, nullable=False, comment="Agent message that delivers the result")
-    iteration = Column(Integer, nullable=False, comment="Iteration number within the execution")
-    type = Column(Integer, nullable=False, comment="1=request, 2=response")
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, comment="Time of the interaction")
-    data = Column(Text, nullable=False, comment="JSON payload")
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    session_id = Column(Integer, nullable=False)
+    user_msg_id = Column(Integer, nullable=False)
+    agent_msg_id = Column(Integer, nullable=False)
+    iteration = Column(Integer, nullable=False)
+    type = Column(Integer, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.now, server_default=LOCALTIME, nullable=False)
+    data = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.now, server_default=LOCALTIME, nullable=False)
 
     __table_args__ = (
         UniqueConstraint(

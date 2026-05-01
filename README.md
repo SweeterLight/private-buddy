@@ -22,7 +22,7 @@ More features will be added gradually.
 
 - Python 3.11 or higher
 - Node.js 18 or higher
-- MySQL 8.0 or higher
+- sqlite3 (usually pre-installed on macOS/Linux)
 - LLM API key
 
 ### 1. Clone the Repository
@@ -40,9 +40,8 @@ cd server
 # Setup environment (will use Python 3.11+ automatically)
 ./setup.sh
 
-# Configure environment variables
+# Configure environment variables (optional)
 cp .env.example .env
-# Edit .env with your database and API configurations
 
 # Initialize database
 cd database

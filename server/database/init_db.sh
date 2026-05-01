@@ -4,106 +4,133 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_DIR="$(dirname "$SCRIPT_DIR")"
-ENV_FILE="$SERVER_DIR/.env"
-SQL_DIR="$SCRIPT_DIR/sql"
+DATA_DIR="$HOME/PrivateBuddyData/db"
+DB_FILE="$DATA_DIR/private_buddy.db"
+FULL_INIT_SQL="$SCRIPT_DIR/sql/full_init.sql"
+UPGRADE_SQL_DIR="$SCRIPT_DIR/sql/upgrade"
+
+MODE="${1:-init}"
+
+usage() {
+    echo "Usage: $0 [init|upgrade]"
+    echo ""
+    echo "  init    Create a fresh database from the current full schema (default)"
+    echo "  upgrade Apply incremental upgrade SQL files to an existing database"
+    echo ""
+    exit 1
+}
+
+if [[ "$MODE" != "init" && "$MODE" != "upgrade" ]]; then
+    usage
+fi
 
 echo "========================================="
-echo "  Private Buddy Database Initialization"
+if [ "$MODE" = "init" ]; then
+    echo "  Private Buddy Database Initialization"
+else
+    echo "  Private Buddy Database Upgrade"
+fi
 echo "========================================="
 echo ""
 
-if [ ! -f "$ENV_FILE" ]; then
-    echo "Error: Environment configuration file not found: $ENV_FILE"
-    echo "Please create .env file and configure database connection"
-    exit 1
-fi
-
-echo "Reading database configuration..."
-DB_HOST="localhost"
-DB_PORT="3306"
-DB_USER="root"
-DB_PASS=""
-DB_NAME="private_buddy"
-
-while IFS='=' read -r key value; do
-    case "$key" in
-        DATABASE_URL)
-            if [[ $value =~ mysql\+pymysql://([^:]*):?([^@]*)@([^:]*):([0-9]*)/(.*) ]]; then
-                DB_USER="${BASH_REMATCH[1]}"
-                DB_PASS="${BASH_REMATCH[2]}"
-                DB_HOST="${BASH_REMATCH[3]}"
-                DB_PORT="${BASH_REMATCH[4]}"
-                DB_NAME="${BASH_REMATCH[5]}"
-            elif [[ $value =~ mysql\+pymysql://([^@]*)@([^:]*):([0-9]*)/(.*) ]]; then
-                DB_USER="${BASH_REMATCH[1]}"
-                DB_HOST="${BASH_REMATCH[2]}"
-                DB_PORT="${BASH_REMATCH[3]}"
-                DB_NAME="${BASH_REMATCH[4]}"
-            fi
-            ;;
-    esac
-done < "$ENV_FILE"
-
-echo "Database configuration:"
-echo "  Host: $DB_HOST:$DB_PORT"
-echo "  User: $DB_USER"
-echo "  Database: $DB_NAME"
-echo ""
-
-if [ ! -d "$SQL_DIR" ]; then
-    echo "Error: SQL directory not found: $SQL_DIR"
-    exit 1
-fi
-
-SQL_FILES=($(ls "$SQL_DIR"/*.sql 2>/dev/null | sort -V))
-
-if [ ${#SQL_FILES[@]} -eq 0 ]; then
-    echo "Error: No SQL files found in $SQL_DIR directory"
-    exit 1
-fi
-
-echo "Found SQL files:"
-for file in "${SQL_FILES[@]}"; do
-    echo "  - $(basename "$file")"
-done
-echo ""
-
-read -p "Continue to initialize database? (y/N): " -n 1 -r
-echo ""
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Initialization cancelled"
-    exit 0
-fi
-
-echo ""
-echo "Step 1: Creating database (if not exists)..."
-mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" ${DB_PASS:+-p"$DB_PASS"} -e "CREATE DATABASE IF NOT EXISTS \`$DB_NAME\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-echo "✓ Database created or already exists"
-
-echo ""
-echo "Step 2: Executing SQL files..."
-for file in "${SQL_FILES[@]}"; do
-    filename=$(basename "$file")
-    echo "  Executing: $filename"
-    
-    if mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" ${DB_PASS:+-p"$DB_PASS"} "$DB_NAME" < "$file"; then
-        echo "  ✓ $filename executed successfully"
-    else
-        echo "  ✗ $filename execution failed"
+if [ "$MODE" = "init" ]; then
+    if [ ! -f "$FULL_INIT_SQL" ]; then
+        echo "Error: Full init SQL file not found: $FULL_INIT_SQL"
         exit 1
     fi
-done
+
+    if [ -f "$DB_FILE" ]; then
+        echo "Warning: Database file already exists: $DB_FILE"
+        read -p "Overwrite existing database? (y/N): " -n 1 -r
+        echo ""
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo "Initialization cancelled"
+            exit 0
+        fi
+        rm -f "$DB_FILE"
+        echo "✓ Existing database removed"
+    fi
+
+    echo ""
+    read -p "Continue to initialize database? (y/N): " -n 1 -r
+    echo ""
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Initialization cancelled"
+        exit 0
+    fi
+
+    echo ""
+    echo "Step 1: Creating data directory..."
+    mkdir -p "$DATA_DIR"
+    echo "✓ Data directory ready"
+
+    echo ""
+    echo "Step 2: Executing full init SQL..."
+    if sqlite3 "$DB_FILE" < "$FULL_INIT_SQL"; then
+        echo "  ✓ full_init.sql executed successfully"
+    else
+        echo "  ✗ full_init.sql execution failed"
+        exit 1
+    fi
+
+    echo ""
+    echo "========================================="
+    echo "  Database initialization complete!"
+    echo "========================================="
+
+else
+    if [ ! -f "$DB_FILE" ]; then
+        echo "Error: Database file not found: $DB_FILE"
+        echo "Run '$0 init' first to create a new database."
+        exit 1
+    fi
+
+    if [ ! -d "$UPGRADE_SQL_DIR" ]; then
+        echo "Error: Upgrade SQL directory not found: $UPGRADE_SQL_DIR"
+        exit 1
+    fi
+
+    SQL_FILES=($(ls "$UPGRADE_SQL_DIR"/*.sql 2>/dev/null | sort -V))
+    if [ ${#SQL_FILES[@]} -eq 0 ]; then
+        echo "No upgrade SQL files found. Database is already up to date."
+        exit 0
+    fi
+
+    echo ""
+    echo "Upgrade SQL files to apply:"
+    for file in "${SQL_FILES[@]}"; do
+        echo "  - $(basename "$file")"
+    done
+    echo ""
+
+    read -p "Continue to upgrade database? (y/N): " -n 1 -r
+    echo ""
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Upgrade cancelled"
+        exit 0
+    fi
+
+    echo ""
+    echo "Applying upgrade SQL files..."
+    for file in "${SQL_FILES[@]}"; do
+        filename=$(basename "$file")
+        echo "  Executing: $filename"
+        if sqlite3 "$DB_FILE" < "$file"; then
+            echo "  ✓ $filename applied successfully"
+        else
+            echo "  ✗ $filename failed"
+            exit 1
+        fi
+    done
+
+    echo ""
+    echo "========================================="
+    echo "  Database upgrade complete!"
+    echo "========================================="
+fi
 
 echo ""
-echo "========================================="
-echo "  Database initialization complete!"
-echo "========================================="
-echo ""
-echo "Database structure created:"
-echo "  - llm_configs (LLM configuration table)"
-echo "  - agents (Agent configuration table)"
-echo "  - sessions (Session table)"
-echo "  - messages (Message table)"
+echo "Database file: $DB_FILE"
 echo ""
 echo "Next step: Start server service"
 echo "  cd $SERVER_DIR"

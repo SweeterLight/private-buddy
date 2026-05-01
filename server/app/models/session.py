@@ -1,7 +1,8 @@
 from sqlalchemy import Column, Integer, String, DateTime
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
+from datetime import datetime
 from app.database import Base
+from .base import LOCALTIME
 
 
 SESSION_STATUS_STREAMING = 0
@@ -15,8 +16,8 @@ class Session(Base):
     title = Column(String(255), nullable=False, default='')
     agent_id = Column(Integer, nullable=False, index=True)
     status = Column(Integer, default=SESSION_STATUS_IDLE, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.now, server_default=LOCALTIME, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.now, server_default=LOCALTIME, onupdate=datetime.now, nullable=False)
 
     messages = relationship(
         "Message",

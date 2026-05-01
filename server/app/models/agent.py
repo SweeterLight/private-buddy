@@ -1,7 +1,8 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
+from datetime import datetime
 from app.database import Base
+from .base import LOCALTIME
 
 
 class Agent(Base):
@@ -21,8 +22,8 @@ class Agent(Base):
     embedding_config_id = Column(Integer, nullable=False, default=0, index=True)
     description = Column(Text, nullable=False, default='')
     avatar = Column(String(500), nullable=False, default='')  # Relative path under PrivateBuddyData/avatars/
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.now, server_default=LOCALTIME, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.now, server_default=LOCALTIME, onupdate=datetime.now, nullable=False)
 
     llm_config = relationship(
         "LLMConfig",

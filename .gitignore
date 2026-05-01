@@ -89,6 +89,7 @@ Thumbs.db
 doc/draft
 doc/experiments
 server/chroma_db/
+server/data/
 
 # Temporary files
 *.tmp

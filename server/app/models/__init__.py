@@ -5,5 +5,6 @@ from app.models.agent import Agent
 from app.models.embedding_config import EmbeddingConfig
 from app.models.historical_summary import HistoricalSummary
 from app.models.interaction import Interaction
+from app.models.db_version import DBVersion
 
-__all__ = ["Session", "Message", "LLMConfig", "Agent", "EmbeddingConfig", "HistoricalSummary", "Interaction"]
+__all__ = ["Session", "Message", "LLMConfig", "Agent", "EmbeddingConfig", "HistoricalSummary", "Interaction", "DBVersion"]

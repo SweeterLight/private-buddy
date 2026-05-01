@@ -171,6 +171,7 @@ class TaskExecutor:
                 # 9. Run task loop
                 task_loop = TaskLoop(
                     llm_client=llm_client,
+                    llm_config=llm_config,
                     tools=tools,
                     context_manager=context,
                     max_iterations=effective_max_iterations,

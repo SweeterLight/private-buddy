@@ -4,8 +4,10 @@ Workspace manager for agent execution isolation.
 Each session gets an isolated workspace directory under the configured root.
 All files created during agent execution are confined to this directory.
 
-Workspace structure (0.0.5):
+Workspace structure (0.0.8):
     ~/PrivateBuddyData/
+        db/                         -- SQLite database
+        chroma/                     -- ChromaDB vector store
         workspace/
             1/                      -- session_id=1 workspace
                 .meta/
@@ -29,11 +31,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Literal, Optional
 
-from app.config import get_settings
+from app.config import get_settings, DATA_ROOT
 from app.logger import logger
-
-
-DEFAULT_DATA_ROOT = Path.home() / "PrivateBuddyData"
 
 # Note entry types for structured logging
 NOTE_TYPE_OBSERVATION = "observation"
@@ -58,7 +57,7 @@ def get_workspace_root() -> Path:
     settings = get_settings()
     if settings.workspace_root:
         return Path(settings.workspace_root)
-    return DEFAULT_DATA_ROOT / "workspace"
+    return Path(settings.data_root) / "workspace"
 
 
 def get_avatars_dir() -> Path:
@@ -71,7 +70,8 @@ def get_avatars_dir() -> Path:
     Returns:
         Path to the avatars directory.
     """
-    avatars_dir = DEFAULT_DATA_ROOT / "avatars"
+    settings = get_settings()
+    avatars_dir = Path(settings.data_root) / "avatars"
     avatars_dir.mkdir(parents=True, exist_ok=True)
     return avatars_dir
 

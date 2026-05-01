@@ -1,7 +1,8 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
+from datetime import datetime
 from app.database import Base
+from .base import LOCALTIME
 
 
 MESSAGE_STATUS_STREAMING = 0
@@ -20,9 +21,9 @@ class Message(Base):
     role = Column(String(20), nullable=False)
     content = Column(Text, nullable=False)
     status = Column(Integer, default=MESSAGE_STATUS_COMPLETED, nullable=False)
-    has_interactions = Column(Integer, default=HAS_INTERACTIONS_NONE, nullable=False, comment="0=pending, 1=has interactions, 2=no interactions")
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    has_interactions = Column(Integer, default=HAS_INTERACTIONS_NONE, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.now, server_default=LOCALTIME, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.now, server_default=LOCALTIME, onupdate=datetime.now)
 
     session = relationship(
         "Session",

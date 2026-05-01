@@ -1,6 +1,6 @@
 [project]
 name = "private-buddy-server"
-version = "0.1.0"
+version = "0.0.8"
 description = "Private Buddy Server Service - A private AI chat assistant"
 authors = [
     {name = "Private Buddy Team", email = "team@private-buddy.com"}
@@ -22,7 +22,6 @@ dependencies = [
     "fastapi>=0.109.0",
     "uvicorn[standard]>=0.27.0",
     "sqlalchemy>=2.0.23",
-    "pymysql>=1.1.0",
     "python-dotenv>=1.0.0",
     "pydantic>=2.5.3",
     "pydantic-settings>=2.1.0",

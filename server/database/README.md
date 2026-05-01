@@ -6,80 +6,101 @@ This directory contains database initialization scripts and SQL files for the Pr
 
 ```
 database/
-├── init_db.sh    # Database initialization script
-├── sql/          # SQL files directory
-│   └── 0.0.1.sql # Version 0.0.1 database structure
-└── README.md     # This file
+├── init_db.sh         # Database initialization/upgrade script
+├── sql/
+│   ├── full_init.sql  # Full schema for fresh database initialization
+│   └── upgrade/       # Incremental upgrade SQL files
+│                       # (empty for 0.0.8 — breaking change, no upgrade path)
+└── README.md
 ```
 
 ## Usage
 
-### One-Click Database Initialization
-
-Run the initialization script:
+### Fresh Database Initialization
 
 ```bash
 cd server/database
-./init_db.sh
+./init_db.sh          # or ./init_db.sh init
 ```
 
 This script will:
-1. Read database configuration from `server/.env` file
-2. Create database if it doesn't exist
-3. Execute SQL files in `sql/` directory in version order
+1. Create `$HOME/PrivateBuddyData/db/` directory if it doesn't exist
+2. Execute SQL files in `sql/init/` directory
+3. Create SQLite database file at `$HOME/PrivateBuddyData/db/private_buddy.db`
 4. Display execution progress and results
+
+If the database file already exists, the script will ask for confirmation before overwriting.
+
+### Database Upgrade
+
+```bash
+cd server/database
+./init_db.sh upgrade
+```
+
+This script will:
+1. Check that the database file exists
+2. Execute SQL files in `sql/upgrade/` directory in version order
+3. Apply incremental schema changes to the existing database
+
+If no upgrade SQL files are found, it reports that the database is already up to date.
 
 ### Prerequisites
 
-1. MySQL database installed
-2. `server/.env` file created with database connection configuration
-3. MySQL client command `mysql` available in terminal
+1. `sqlite3` command available in terminal
 
-### Environment Configuration
+### Database Location
 
-Configure database connection in `server/.env` file:
+The SQLite database file is stored at `~/PrivateBuddyData/db/private_buddy.db`. The application also uses `Base.metadata.create_all()` to ensure all tables exist on startup, so manual initialization is optional.
 
-```env
-DATABASE_URL=mysql+pymysql://user:password@localhost:3306/private_buddy
+### Data Directory
+
+All application data is unified under `~/PrivateBuddyData/`:
+
+```
+~/PrivateBuddyData/
+    db/                 -- SQLite database (private_buddy.db)
+    chroma/             -- ChromaDB vector store
+    workspace/          -- Agent task workspace
+    avatars/            -- Agent avatar images
 ```
 
-**Examples:**
-- Without password: `mysql+pymysql://root@localhost:3306/private_buddy`
-- With password: `mysql+pymysql://root:password@localhost:3306/private_buddy`
+The `DATA_ROOT` can be configured via `.env` file (defaults to `~/PrivateBuddyData`).
 
-## SQL File Version Management
+## SQL File Management
 
-### Version Naming Convention
+### Full Init SQL (`sql/full_init.sql`)
 
-SQL files are named using version numbers, format: `major.minor.patch.sql`
+Contains the **complete schema** for the current version. Updated with each release to reflect the full database structure. Used for fresh database creation only.
 
-**Examples:**
-- `0.0.1.sql` - Initial version
-- `0.1.0.sql` - Add new tables or major changes
-- `0.1.1.sql` - Minor fixes or index optimization
+### Upgrade SQL (`sql/upgrade/`)
 
-### Execution Order
+Contains **incremental** schema changes between versions. Each file represents the delta from one version to the next.
 
-The script automatically executes SQL files in version order:
-- Uses `sort -V` for version number sorting
-- Ensures SQL files are executed in correct order
+**Naming convention:** `major.minor.patch.sql` (e.g., `0.0.9.sql`, `0.1.0.sql`)
 
-### Adding New Versions
+**Execution order:** Files are sorted by version number (`sort -V`) and applied sequentially.
 
-1. Create a new SQL file in `sql/` directory
-2. Use correct version number naming
-3. Add comments at the beginning of the file to describe changes
+### Adding a New Version
 
-**Example:**
+1. Modify tables as needed
+2. Create an incremental SQL file in `sql/upgrade/` (e.g., `0.0.9.sql`)
+3. Update `sql/full_init.sql` to reflect all changes
+4. Add comments at the beginning of the upgrade file to describe changes
+5. The upgrade SQL should also insert a record into `db_versions`
+
+**Example upgrade file:**
 
 ```sql
--- Version: 0.1.0
--- Date: 2026-04-20
+-- 0.0.9 Schema
 -- Changes: Add user preferences table
 
-CREATE TABLE user_preferences (
+CREATE TABLE IF NOT EXISTS user_preferences (
     ...
 );
+
+INSERT INTO db_versions (version, description)
+VALUES ('0.0.9', 'Add user preferences table');
 ```
 
 ## Database Structure
@@ -89,14 +110,30 @@ CREATE TABLE user_preferences (
 **llm_configs** - LLM configuration table
 - Stores LLM configuration information, including model name, API keys, etc.
 
+**embedding_configs** - Embedding configuration table
+- Stores embedding model configuration for RAG retrieval
+
 **agents** - Agent configuration table
-- Stores Agent configuration, associated with LLM configuration and system prompts
+- Stores Agent configuration, associated with LLM configuration and character settings
 
 **sessions** - Session table
 - Stores session information, associated with Agent
 
 **messages** - Message table
 - Stores message records, associated with session
+
+**interactions** - Interaction table
+- Stores agent-world interaction records (LLM request/response per iteration)
+
+**historical_summaries** - Historical summary table
+- Stores conversation summaries and cached narratives
+
+**search_config** - Search configuration table
+- Single record (id=1) for search engine configuration
+
+**db_versions** - Database version tracking table
+- Records each schema version applied to the database
+- Used for upgrade detection and future automated migration support
 
 ### Index Optimization
 
@@ -117,6 +154,12 @@ CREATE TABLE user_preferences (
 - `idx_messages_session_created` - Composite index, optimize message history query
 - `idx_messages_session_status` - Composite index, optimize streaming message query
 
+**interactions table:**
+- `idx_interactions_session` - Query by session ID
+- `idx_interactions_user_msg` - Query by user message ID
+- `idx_interactions_agent_msg` - Query by agent message ID
+- `idx_interactions_session_iteration` - Composite index, optimize iteration query
+
 ## Database Design Principles
 
 This project follows these database design principles:
@@ -129,45 +172,28 @@ This project follows these database design principles:
 
 ## Important Notes
 
-1. **Backup data** - Always backup before performing any database operations
+1. **Backup data** - Always backup before performing any database operations (copy the .db file)
 2. **Test environment** - Validate database changes in test environment first
 3. **Version control** - Commit new SQL files to version control system
 4. **Idempotency** - SQL files should support repeated execution (use IF NOT EXISTS, etc.)
 
-## Performance Monitoring
-
-View slow queries:
-
-```sql
--- View slow query log status
-SHOW VARIABLES LIKE 'slow_query%';
-
--- View index usage
-SHOW INDEX FROM messages;
-
--- Analyze query performance
-EXPLAIN SELECT * FROM messages WHERE session_id = 1 ORDER BY created_at ASC;
-```
-
 ## Troubleshooting
 
-### Connection Failed
+### Database File Not Created
 
-Check the following configurations:
-1. Is MySQL service running
-2. Are connection settings in `.env` file correct
-3. Does user have sufficient permissions
+Check the following:
+1. Is `~/PrivateBuddyData/db/` directory writable
+2. Is `sqlite3` command available
+3. Check application logs for errors
 
 ### SQL Execution Failed
 
-1. Check SQL syntax
-2. Confirm if table or field already exists
-3. Check MySQL error log
+1. Check SQL syntax for SQLite compatibility
+2. Confirm if table or column already exists
+3. Note: SQLite has limited ALTER TABLE support (no DROP COLUMN before 3.35.0)
 
-### Permission Issues
+### Connection Issues
 
-Ensure database user has the following permissions:
-- CREATE DATABASE
-- CREATE TABLE
-- ALTER TABLE
-- INDEX
+1. Check `DATA_ROOT` in `.env` file
+2. Ensure the database file path is correct
+3. Check file permissions

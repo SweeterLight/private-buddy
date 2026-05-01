@@ -6,9 +6,9 @@ When is_active is False or api_key is empty, the search tool is not available.
 """
 
 from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean
-from sqlalchemy.sql import func
-
+from datetime import datetime
 from app.database import Base
+from .base import LOCALTIME
 
 
 class SearchConfig(Base):
@@ -26,7 +26,7 @@ class SearchConfig(Base):
     api_key = Column(String(255), nullable=False, default='')
     description = Column(Text, nullable=False, default='')
     is_active = Column(Boolean, nullable=False, default=False)
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    updated_at = Column(DateTime(timezone=True), default=datetime.now, server_default=LOCALTIME, onupdate=datetime.now, nullable=False)
 
     def is_available(self) -> bool:
         """

@@ -78,3 +78,7 @@ export const getAvatarUrl = (avatar: string) => {
   if (!avatar) return '';
   return `${SERVER_BASE_URL}/avatars/${avatar}`;
 };
+
+export const versionApi = {
+  get: () => api.get<{ version: string }>('/version'),
+};
