@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Button, Tooltip } from 'antd';
+import { Button, Tooltip, message } from 'antd';
 import { SettingOutlined, PlusOutlined, ArrowLeftOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { changeLanguage, getCurrentLanguage } from './i18n';
@@ -10,7 +10,7 @@ import EmbeddingConfigList from './components/EmbeddingConfigList';
 import AgentConfig from './components/AgentConfig';
 import SearchConfigForm from './components/SearchConfigForm';
 import { ConfigIcon } from './components/AgentAvatar';
-import { versionApi } from './services/api';
+import { versionApi, initApiClient } from './services/api';
 import type { IconType } from './components/AgentAvatar';
 import type { Session, LLMConfig, EmbeddingConfig } from './types';
 import './App.css';
@@ -35,6 +35,39 @@ function App() {
   const [showCreateEmbedding, setShowCreateEmbedding] = useState(false);
   const [currentLang, setCurrentLang] = useState(getCurrentLanguage());
   const [version, setVersion] = useState<string>('');
+  const [isMacElectron, setIsMacElectron] = useState(false);
+  const [isWinLinuxElectron, setIsWinLinuxElectron] = useState(false);
+
+  useEffect(() => {
+    if (window.electronAPI) {
+      window.electronAPI.getPlatform().then(platform => {
+        setIsMacElectron(platform === 'darwin');
+        setIsWinLinuxElectron(platform !== 'darwin');
+      });
+      initApiClient();
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!window.electronAPI?.onBackendStatus) return;
+    const unsubscribe = window.electronAPI.onBackendStatus((status) => {
+      if (status === 'ready') {
+        setRefreshKey(prev => prev + 1);
+        versionApi.get()
+          .then(res => setVersion(res.data.version))
+          .catch(() => setVersion(''));
+      }
+    });
+    return unsubscribe;
+  }, []);
+
+  useEffect(() => {
+    if (!window.electronAPI?.onBackendError) return;
+    const unsubscribe = window.electronAPI.onBackendError((error) => {
+      message.error(`Backend failed to start: ${error}`, 0);
+    });
+    return unsubscribe;
+  }, []);
 
   useEffect(() => {
     versionApi.get()
@@ -255,10 +288,10 @@ function App() {
 
   return (
     <div className="app-container">
-      <header className="app-header">
+      <header className={`app-header${isMacElectron ? ' app-header-mac' : ''}${isWinLinuxElectron ? ' app-header-win-linux' : ''}`}>
         <Tooltip title={version ? `v${version}` : ''} placement="right">
           <div className="app-logo">
-            <img src="/favicon.svg" alt="logo" className="app-logo-img" />
+            <img src="./favicon.svg" alt="logo" className="app-logo-img" />
             Private Buddy
           </div>
         </Tooltip>

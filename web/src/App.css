@@ -96,29 +96,31 @@
 }
 
 .app-header {
-  height: 56px;
+  height: 38px;
   background-color: white;
   border-bottom: 1px solid #e5e7eb;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 24px;
+  padding: 0 12px;
   flex-shrink: 0;
+  -webkit-app-region: drag;
+  user-select: none;
 }
 
 .app-logo {
-  font-size: 20px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--color-text-primary);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .app-logo-img {
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
   object-fit: contain;
 }
 
@@ -126,6 +128,15 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.app-header-mac {
+  padding-left: 72px;
+}
+
+.app-header-win-linux {
+  padding-right: 138px;
 }
 
 .app-body {
