@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -25,20 +24,9 @@ var allowedAvatarExtensions = map[string]bool{
 	".webp": true,
 }
 
-// UploadAvatar handles avatar image upload for agents.
-// Validates file type, size, and saves to the avatars directory.
+// UploadAvatar handles avatar image upload.
+// Validates file type and size, saves to the avatars directory, returns the filename.
 func (h *Handler) UploadAvatar(c *gin.Context) {
-	agentIDStr := c.Query("agent_id")
-	if agentIDStr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "agent_id is required"})
-		return
-	}
-	agentID, err := strconv.ParseInt(agentIDStr, 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "Invalid agent_id"})
-		return
-	}
-
 	file, err := c.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": "No file uploaded"})
@@ -71,7 +59,7 @@ func (h *Handler) UploadAvatar(c *gin.Context) {
 		return
 	}
 
-	filename := fmt.Sprintf("%d_%d%s", agentID, time.Now().Unix(), ext)
+	filename := fmt.Sprintf("%d%s", time.Now().UnixMilli(), ext)
 	savePath := filepath.Join(avatarsDir, filename)
 
 	if err := c.SaveUploadedFile(file, savePath); err != nil {

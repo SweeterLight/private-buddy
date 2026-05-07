@@ -125,7 +125,7 @@ const AgentList: React.FC<AgentListProps> = ({ currentSessionId, onSelectSession
   };
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+    <div className="app-sidebar">
       {loading ? (
         <div style={{ textAlign: 'center', padding: '20px', color: 'var(--color-text-placeholder)' }}>
           {t('sidebar.loading')}

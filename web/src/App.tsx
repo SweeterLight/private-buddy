@@ -1,18 +1,21 @@
 import { useState, useEffect } from 'react';
 import { Button, Tooltip, message } from 'antd';
-import { SettingOutlined, PlusOutlined, ArrowLeftOutlined } from '@ant-design/icons';
+import { SettingOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { changeLanguage, getCurrentLanguage } from './i18n';
+import useScrolling from './hooks/useScrolling';
 import AgentList from './components/AgentList';
 import ChatWindow from './components/ChatWindow';
 import LLMConfigList from './components/LLMConfigList';
 import EmbeddingConfigList from './components/EmbeddingConfigList';
 import AgentConfig from './components/AgentConfig';
 import SearchConfigForm from './components/SearchConfigForm';
+import ResizableCard from './components/ResizableCard';
+import PanelDetail from './components/PanelDetail';
 import { ConfigIcon } from './components/AgentAvatar';
 import { versionApi, initApiClient } from './services/api';
 import type { IconType } from './components/AgentAvatar';
-import type { Session, LLMConfig, EmbeddingConfig } from './types';
+import type { Session, LLMConfig } from './types';
 import './App.css';
 
 type RightPanelView = null | 'settings-overview' | 'settings-agent' | 'settings-llm' | 'settings-embedding' | 'settings-search' | 'settings-language';
@@ -37,6 +40,8 @@ function App() {
   const [version, setVersion] = useState<string>('');
   const [isMacElectron, setIsMacElectron] = useState(false);
   const [isWinLinuxElectron, setIsWinLinuxElectron] = useState(false);
+
+  useScrolling();
 
   useEffect(() => {
     if (window.electronAPI) {
@@ -88,10 +93,6 @@ function App() {
     }
   };
 
-  const handleSelectEmbeddingConfig = (config: EmbeddingConfig | null) => {
-    console.log('Selected embedding config:', config);
-  };
-
   const handleCreateSession = (agentId: number) => {
     const tempSession: Session = {
       id: -1,
@@ -112,6 +113,8 @@ function App() {
   const handleAgentCreated = () => {
     setRefreshKey(prev => prev + 1);
   };
+
+  const goBackToSettings = () => setRightPanelView('settings-overview');
 
   const settingsLabelMap: Record<string, string> = {
     'settings-agent': t('settings.agentConfig'),
@@ -142,33 +145,22 @@ function App() {
   );
 
   const renderLanguagePanel = () => (
-    <div className="panel-detail">
-      <div className="panel-detail-header">
-        <Button
-          type="text"
-          icon={<ArrowLeftOutlined />}
-          onClick={() => setRightPanelView('settings-overview')}
-          style={{ color: 'var(--color-text-secondary)' }}
-        />
-        <span className="panel-detail-title">{t('settings.language')}</span>
-      </div>
-      <div className="panel-detail-body">
-        <div className="lang-options">
-          <div
-            className={`lang-option-card ${currentLang === 'zh' ? 'active' : ''}`}
-            onClick={() => handleLanguageChange('zh')}
-          >
-            <span className="lang-option-text">中文</span>
-          </div>
-          <div
-            className={`lang-option-card ${currentLang === 'en' ? 'active' : ''}`}
-            onClick={() => handleLanguageChange('en')}
-          >
-            <span className="lang-option-text">English</span>
-          </div>
+    <PanelDetail title={t('settings.language')} onBack={goBackToSettings}>
+      <div className="lang-options">
+        <div
+          className={`lang-option-card ${currentLang === 'zh' ? 'active' : ''}`}
+          onClick={() => handleLanguageChange('zh')}
+        >
+          <span className="lang-option-text">中文</span>
+        </div>
+        <div
+          className={`lang-option-card ${currentLang === 'en' ? 'active' : ''}`}
+          onClick={() => handleLanguageChange('en')}
+        >
+          <span className="lang-option-text">English</span>
         </div>
       </div>
-    </div>
+    </PanelDetail>
   );
 
   const renderRightPanel = () => {
@@ -178,104 +170,53 @@ function App() {
 
       case 'settings-agent':
         return (
-          <div className="panel-detail">
-            <div className="panel-detail-header">
-              <Button
-                type="text"
-                icon={<ArrowLeftOutlined />}
-                onClick={() => setRightPanelView('settings-overview')}
-                style={{ color: 'var(--color-text-secondary)' }}
-              />
-              <span className="panel-detail-title">{t('agent.title')}</span>
-              <Button
-                type="text"
-                icon={<PlusOutlined />}
-                onClick={() => setShowCreateAgent(true)}
-                style={{ color: 'var(--color-text-secondary)' }}
-              />
-            </div>
-            <div className="panel-detail-body">
-              <AgentConfig
-                showCreate={showCreateAgent}
-                onCreateClose={() => setShowCreateAgent(false)}
-                onAgentCreated={handleAgentCreated}
-              />
-            </div>
-          </div>
+          <PanelDetail
+            title={t('agent.title')}
+            onBack={goBackToSettings}
+            onAdd={() => setShowCreateAgent(true)}
+          >
+            <AgentConfig
+              showCreate={showCreateAgent}
+              onCreateClose={() => setShowCreateAgent(false)}
+              onAgentCreated={handleAgentCreated}
+            />
+          </PanelDetail>
         );
 
       case 'settings-llm':
         return (
-          <div className="panel-detail">
-            <div className="panel-detail-header">
-              <Button
-                type="text"
-                icon={<ArrowLeftOutlined />}
-                onClick={() => setRightPanelView('settings-overview')}
-                style={{ color: 'var(--color-text-secondary)' }}
-              />
-              <span className="panel-detail-title">{t('llmConfig.title')}</span>
-              <Button
-                type="text"
-                icon={<PlusOutlined />}
-                onClick={() => setShowCreateLLM(true)}
-                style={{ color: 'var(--color-text-secondary)' }}
-              />
-            </div>
-            <div className="panel-detail-body">
-              <LLMConfigList
-                onSelectConfig={handleSelectLLMConfig}
-                showCreate={showCreateLLM}
-                onCreateClose={() => setShowCreateLLM(false)}
-              />
-            </div>
-          </div>
+          <PanelDetail
+            title={t('llmConfig.title')}
+            onBack={goBackToSettings}
+            onAdd={() => setShowCreateLLM(true)}
+          >
+            <LLMConfigList
+              onSelectConfig={handleSelectLLMConfig}
+              showCreate={showCreateLLM}
+              onCreateClose={() => setShowCreateLLM(false)}
+            />
+          </PanelDetail>
         );
 
       case 'settings-embedding':
         return (
-          <div className="panel-detail">
-            <div className="panel-detail-header">
-              <Button
-                type="text"
-                icon={<ArrowLeftOutlined />}
-                onClick={() => setRightPanelView('settings-overview')}
-                style={{ color: 'var(--color-text-secondary)' }}
-              />
-              <span className="panel-detail-title">{t('embeddingConfig.title')}</span>
-              <Button
-                type="text"
-                icon={<PlusOutlined />}
-                onClick={() => setShowCreateEmbedding(true)}
-                style={{ color: 'var(--color-text-secondary)' }}
-              />
-            </div>
-            <div className="panel-detail-body">
-              <EmbeddingConfigList
-                onSelectConfig={handleSelectEmbeddingConfig}
-                showCreate={showCreateEmbedding}
-                onCreateClose={() => setShowCreateEmbedding(false)}
-              />
-            </div>
-          </div>
+          <PanelDetail
+            title={t('embeddingConfig.title')}
+            onBack={goBackToSettings}
+            onAdd={() => setShowCreateEmbedding(true)}
+          >
+            <EmbeddingConfigList
+              showCreate={showCreateEmbedding}
+              onCreateClose={() => setShowCreateEmbedding(false)}
+            />
+          </PanelDetail>
         );
 
       case 'settings-search':
         return (
-          <div className="panel-detail">
-            <div className="panel-detail-header">
-              <Button
-                type="text"
-                icon={<ArrowLeftOutlined />}
-                onClick={() => setRightPanelView('settings-overview')}
-                style={{ color: 'var(--color-text-secondary)' }}
-              />
-              <span className="panel-detail-title">{t('searchConfig.title')}</span>
-            </div>
-            <div className="panel-detail-body">
-              <SearchConfigForm />
-            </div>
-          </div>
+          <PanelDetail title={t('searchConfig.title')} onBack={goBackToSettings}>
+            <SearchConfigForm />
+          </PanelDetail>
         );
 
       case 'settings-language':
@@ -309,17 +250,23 @@ function App() {
       </header>
 
       <div className="app-body">
-        <aside className="app-sidebar">
+        <ResizableCard
+          defaultWidth={280}
+          minWidth={200}
+          maxWidth={400}
+          resizeSide="right"
+          className="app-sidebar-wrapper"
+        >
           <AgentList
             key={refreshKey}
             currentSessionId={currentSession?.id || null}
             onSelectSession={handleSelectSession}
             onCreateSession={handleCreateSession}
           />
-        </aside>
+        </ResizableCard>
 
         <div className="app-content">
-          <div className="app-chat-area">
+          <ResizableCard flex className="app-chat-area-wrapper">
             <ChatWindow
               session={currentSession}
               onSessionCreated={(sessionId) => {
@@ -327,12 +274,18 @@ function App() {
                 setCurrentSession(prev => prev ? { ...prev, id: sessionId } : null);
               }}
             />
-          </div>
+          </ResizableCard>
 
           {rightPanelView && (
-            <div className="app-right-panel">
+            <ResizableCard
+              defaultWidth={480}
+              minWidth={320}
+              maxWidth={800}
+              resizeSide="left"
+              className="app-right-panel-wrapper"
+            >
               {renderRightPanel()}
-            </div>
+            </ResizableCard>
           )}
         </div>
       </div>

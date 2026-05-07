@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -97,9 +98,14 @@ func (b *BashTool) Execute(args map[string]interface{}) (string, error) {
 	}
 	applogger.L.Info("BashTool executing", "command", cmdPreview, "timeout_ms", timeoutMs)
 
-	ctx := exec.Command("bash", "-c", command)
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("cmd", "/c", command)
+	} else {
+		cmd = exec.Command("bash", "-c", command)
+	}
 	if b.workspace != "" {
-		ctx.Dir = b.workspace
+		cmd.Dir = b.workspace
 	}
 
 	timeout := time.Duration(timeoutMs) * time.Millisecond
@@ -107,16 +113,16 @@ func (b *BashTool) Execute(args map[string]interface{}) (string, error) {
 	defer timer.Stop()
 
 	var stdout, stderr strings.Builder
-	ctx.Stdout = &stdout
-	ctx.Stderr = &stderr
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 
-	if err := ctx.Start(); err != nil {
+	if err := cmd.Start(); err != nil {
 		result, _ := json.Marshal(BashResult{Stderr: err.Error(), ExitCode: 1})
 		return string(result), nil
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- ctx.Wait() }()
+	go func() { done <- cmd.Wait() }()
 
 	select {
 	case err := <-done:
@@ -134,7 +140,7 @@ func (b *BashTool) Execute(args map[string]interface{}) (string, error) {
 		})
 		return string(result), nil
 	case <-timer.C:
-		ctx.Process.Kill()
+		cmd.Process.Kill()
 		result, _ := json.Marshal(BashResult{Stderr: "Error: command timed out", ExitCode: -1})
 		return string(result), nil
 	}

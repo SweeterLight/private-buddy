@@ -186,6 +186,10 @@ func (rs *RetrievalService) GetContextForChat(sessionID int64, query string, rec
 // IndexMessages adds messages to the vector store for RAG retrieval.
 // This method adds messages to the vector store after they are completed,
 // enabling future RAG retrieval. Returns true if indexing succeeded.
+//
+// NOTE: This only indexes the given messageIDs (typically the current round).
+// Messages that existed before embedding was configured are NOT retroactively
+// indexed. A batch re-index mechanism is needed to cover that case.
 func (rs *RetrievalService) IndexMessages(sessionID int64, messageIDs []int64) bool {
 	embeddingConfig := rs.GetEmbeddingConfigForSession(sessionID)
 	if embeddingConfig == nil {

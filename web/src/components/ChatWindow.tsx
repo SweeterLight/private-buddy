@@ -1,15 +1,16 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { Input, Button, message, Spin, Modal } from 'antd';
+import { Input, Button, message, Spin } from 'antd';
 import { RobotOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { Send } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { formatMessageTime } from '../utils/time';
 import LoadingSpinner from './LoadingSpinner';
 import AgentAvatar from './AgentAvatar';
+import InteractionModal from './InteractionModal';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Message, Session, Agent, Interaction } from '../types';
-import { HAS_INTERACTIONS_PENDING, HAS_INTERACTIONS_EXISTS, INTERACTION_TYPE_REQUEST } from '../types';
+import { HAS_INTERACTIONS_PENDING, HAS_INTERACTIONS_EXISTS } from '../types';
 import { messageApi, sessionApi, agentApi, interactionApi, getDynamicApiBaseUrl } from '../services/api';
 import { logger, MESSAGE_STATUS_STREAMING, SESSION_STATUS_STREAMING } from '../logger';
 
@@ -480,81 +481,15 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
         </div>
       </div>
 
-      <Modal
-        title="Interaction Records"
-        open={interactionModalVisible}
-        onCancel={() => {
+      <InteractionModal
+        visible={interactionModalVisible}
+        loading={interactionsLoading}
+        interactions={selectedInteractions}
+        onClose={() => {
           setInteractionModalVisible(false);
           setSelectedInteractions([]);
         }}
-        footer={null}
-        width={800}
-      >
-        {interactionsLoading ? (
-          <div style={{ textAlign: 'center', padding: '20px' }}>
-            <Spin />
-          </div>
-        ) : (
-          <div style={{ maxHeight: '600px', overflowY: 'auto' }}>
-            {selectedInteractions.length === 0 ? (
-              <div style={{ textAlign: 'center', color: 'var(--color-text-placeholder)', padding: '20px' }}>
-                No interaction records found
-              </div>
-            ) : (
-              (() => {
-                const iterationMap = new Map<number, Interaction[]>();
-                selectedInteractions.forEach(interaction => {
-                  const list = iterationMap.get(interaction.iteration) || [];
-                  list.push(interaction);
-                  iterationMap.set(interaction.iteration, list);
-                });
-                return Array.from(iterationMap.entries()).map(([iteration, items]) => (
-                  <div key={`iter-${iteration}`} style={{ marginBottom: '16px' }}>
-                    <div style={{ fontWeight: 600, fontSize: '14px', marginBottom: '8px', color: '#374151' }}>
-                      Iteration {iteration}
-                    </div>
-                    {items.map(interaction => {
-                      const typeLabel = interaction.type === INTERACTION_TYPE_REQUEST ? 'Request' : 'Response';
-                      const typeColor = interaction.type === INTERACTION_TYPE_REQUEST ? '#3b82f6' : '#10b981';
-                      return (
-                        <div key={`interaction-${interaction.id}`} style={{ marginLeft: '16px', marginBottom: '8px' }}>
-                          <div style={{ fontSize: '12px', marginBottom: '4px' }}>
-                            <span style={{ color: typeColor, fontWeight: 500 }}>{typeLabel}</span>
-                            <span style={{ color: 'var(--color-text-placeholder)', marginLeft: '8px' }}>
-                              {formatMessageTime(new Date(interaction.updated_at))}
-                            </span>
-                          </div>
-                          <pre style={{
-                            whiteSpace: 'pre-wrap',
-                            wordBreak: 'break-word',
-                            fontSize: '12px',
-                            lineHeight: '1.5',
-                            margin: 0,
-                            padding: '8px',
-                            background: '#f9fafb',
-                            borderRadius: '4px',
-                            border: '1px solid #e5e7eb',
-                            maxHeight: '300px',
-                            overflowY: 'auto',
-                          }}>
-                            {(() => {
-                              try {
-                                return JSON.stringify(JSON.parse(interaction.data), null, 2);
-                              } catch {
-                                return interaction.data;
-                              }
-                            })()}
-                          </pre>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ));
-              })()
-            )}
-          </div>
-        )}
-      </Modal>
+      />
     </>
   );
 };

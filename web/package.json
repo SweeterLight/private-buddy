@@ -1,7 +1,7 @@
 {
   "name": "private-buddy-web",
   "private": true,
-  "version": "0.0.9",
+  "version": "0.0.10",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -19,6 +19,7 @@
     "react-dom": "^19.2.4",
     "react-i18next": "^17.0.4",
     "react-markdown": "^10.1.0",
+    "react-resizable-panels": "^4.11.0",
     "react-router-dom": "^7.14.1",
     "remark-gfm": "^4.0.1"
   },

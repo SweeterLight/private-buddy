@@ -339,7 +339,10 @@ func (cs *ChatService) Process(triggerMessageID, aiMessageID int64) (string, err
 		"response_length", len(fullContent),
 	)
 
-	// Index messages for RAG if embedding is available
+	// Index messages for RAG if embedding is available.
+	// NOTE: Only the current round of messages is indexed. Historical messages
+	// generated before embedding was configured will NOT be retroactively indexed.
+	// A "re-index" feature is needed to fill this gap.
 	if hasEmbedding {
 		go func() {
 			retrievalSvc.IndexMessages(sessionID, []int64{triggerMessageID, aiMessageID})

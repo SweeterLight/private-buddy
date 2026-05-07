@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.0.10] - 2026-05-08
+
+### Added
+- ResizableCard component for draggable card-based UI layout
+
+### Changed
+- BashTool: use `cmd /c` on Windows instead of `bash -c`
+- Embedding option label: "Default" → "Not used"
+- Chat input placeholder: "Finally remembered me? Shift+Enter for new line"
+- Replace console.log with logger in api.ts
+
+### Fixed
+- Agent avatar not persisted when creating with avatar selected
+
+
 ## [0.0.9] - 2026-05-06
 
 ### Added

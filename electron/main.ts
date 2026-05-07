@@ -58,7 +58,7 @@ function createMainWindow(autoShow: boolean = false): void {
     titleBarStyle: 'hidden',
     titleBarOverlay: {
       height: 38,
-      color: '#ffffff',
+      color: '#f9fafb',
       symbolColor: '#6b7280',
     },
     show: false,

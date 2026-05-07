@@ -1,6 +1,9 @@
 <div align="center">
   <img src="web/public/favicon.svg" alt="Private Buddy" width="64">
   <h1>Private Buddy</h1>
+  <p>
+    <img src="https://img.shields.io/github/license/KoanJan/private-buddy" alt="License">
+  </p>
 </div>
 
 A modern, private AI assistant system built from scratch. I initially called this project "Boring Practice" because it was just a practice project - I once just wanted to build a modern agent system from zero to show I know how to do it. However, as development and iteration continued, I thought perhaps I could try to make it a low-barrier application: no complex deployment, users can start using it right after downloading and installing. Additionally, I found something interesting — as an engineer without a background in cognitive science, psychology, or narratology, I discovered that through AI one can quickly judge whether certain theories have practical positive significance for the current business or engineering, and then apply them cross-disciplinarily, which was truly hard to imagine before.
@@ -18,17 +21,11 @@ More features will be added gradually.
 
 ## Quick Start
 
-### Prerequisites
-
-- Go 1.26 or higher
-- Node.js 18 or higher
-- LLM API key
-
 ### Option A: Desktop Application (Recommended)
 
-Download the latest release for your platform from the [Releases](https://github.com/KoanJan/private-buddy/releases) page.
+Download the latest release for your platform from the [Releases](https://github.com/KoanJan/private-buddy/releases) page. No development environment required.
 
-Or build from source:
+Or build from source (requires Go 1.26+ and Node.js 18+):
 
 ```bash
 # Clone the repository

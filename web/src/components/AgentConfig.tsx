@@ -84,17 +84,18 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
 
   const handleCreateAgent = async (values: Record<string, unknown>) => {
     try {
-      const response = await agentApi.create(values);
-      const newAgent = response.data;
-
+      let avatarFilename = '';
       if (createAvatarFile) {
         try {
-          const uploadRes = await uploadApi.uploadAvatar(newAgent.id, createAvatarFile);
-          newAgent.avatar = uploadRes.data.filename;
+          const uploadRes = await uploadApi.uploadAvatar(createAvatarFile);
+          avatarFilename = uploadRes.data.filename;
         } catch (error) {
           logger.error('Failed to upload avatar:', error);
         }
       }
+
+      const response = await agentApi.create({ ...values, avatar: avatarFilename });
+      const newAgent = response.data;
 
       setAgents([newAgent, ...agents]);
       setModalVisible(false);
@@ -119,7 +120,7 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
 
       if (editAvatarFile) {
         try {
-          const uploadRes = await uploadApi.uploadAvatar(editingAgent.id, editAvatarFile);
+          const uploadRes = await uploadApi.uploadAvatar(editAvatarFile);
           avatarFilename = uploadRes.data.filename;
         } catch (error) {
           logger.error('Failed to upload avatar:', error);

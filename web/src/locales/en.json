@@ -3,7 +3,7 @@
     "title": "Private Buddy",
     "startNewChat": "Start New Chat",
     "selectOrCreate": "Select a session or create a new one to start chatting",
-    "askAnything": "Ask anything, shift+enter for new line",
+    "askAnything": "Finally remembered me? Shift+Enter for new line",
     "generating": "Generating response, please wait..."
   },
   "sidebar": {
@@ -29,7 +29,7 @@
     "llmConfigIdPlaceholder": "Please select LLM config",
     "embeddingConfigId": "Embedding Model",
     "embeddingConfigIdPlaceholder": "Please select Embedding config (optional)",
-    "defaultEmbedding": "Default",
+    "defaultEmbedding": "Not used",
     "noDescription": "No description",
     "createSuccess": "Agent created successfully",
     "createFailed": "Failed to create agent",

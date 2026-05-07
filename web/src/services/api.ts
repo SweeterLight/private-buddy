@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { logger } from '../logger';
 import type { Session, Message, LLMConfig, EmbeddingConfig, Agent, AgentWithSessions, Interaction, SearchConfig } from '../types';
 
 declare global {
@@ -27,20 +28,20 @@ function resolvePort(): Promise<number> {
   portPromise = (async () => {
     try {
       const hasApi = !!window.electronAPI;
-      console.log('[api] electronAPI available:', hasApi);
+      logger.debug('[api] electronAPI available:', hasApi);
       const port = await window.electronAPI?.getServerPort();
-      console.log('[api] got port from IPC:', port);
+      logger.debug('[api] got port from IPC:', port);
       if (port && port > 0) {
         resolvedPort = port;
-        console.log('[api] resolved dynamic port:', port);
+        logger.info('[api] resolved dynamic port:', port);
         return port;
       }
-      console.warn('[api] IPC returned invalid port, falling back to default');
+      logger.warn('[api] IPC returned invalid port, falling back to default');
     } catch (err) {
-      console.warn('[api] getServerPort failed (non-Electron env?):', err);
+      logger.warn('[api] getServerPort failed (non-Electron env?):', err);
     }
     resolvedPort = DEFAULT_PORT;
-    console.log('[api] using default port:', DEFAULT_PORT);
+    logger.info('[api] using default port:', DEFAULT_PORT);
     return DEFAULT_PORT;
   })();
 
@@ -142,10 +143,10 @@ export const searchConfigApi = {
 };
 
 export const uploadApi = {
-  uploadAvatar: (agentId: number, file: File) => {
+  uploadAvatar: (file: File) => {
     const formData = new FormData();
     formData.append('file', file);
-    return api.post<{ filename: string }>(`/uploads/avatar?agent_id=${agentId}`, formData, {
+    return api.post<{ filename: string }>('/uploads/avatar', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },

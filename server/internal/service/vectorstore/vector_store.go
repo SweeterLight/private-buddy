@@ -1,15 +1,15 @@
+// Package vectorstore provides a lightweight vector storage service for semantic search.
+// It uses SQLite as the backend to store vector embeddings and supports cosine similarity
+// based similarity search for retrieval-augmented generation (RAG) use cases.
 package vectorstore
 
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 
 	"private-buddy-server/internal/config"
 	"private-buddy-server/internal/service/llm"
@@ -19,17 +19,26 @@ import (
 	_ "github.com/glebarez/go-sqlite/compat"
 )
 
+// VectorStoreService manages vector storage operations for chat sessions.
+// Each session has its own table in SQLite to store message embeddings,
+// enabling semantic search across conversation history.
 type VectorStoreService struct {
+	// embeddingSvc generates vector embeddings from text content
 	embeddingSvc *llm.EmbeddingService
-	db           *sql.DB
+	// db is the SQLite connection for persistent vector storage
+	db *sql.DB
 }
 
+// NewVectorStoreService creates a new VectorStoreService instance.
+// The embeddingSvc parameter can be nil if embedding functionality is not needed.
 func NewVectorStoreService(embeddingSvc *llm.EmbeddingService) *VectorStoreService {
 	return &VectorStoreService{
 		embeddingSvc: embeddingSvc,
 	}
 }
 
+// Init initializes the vector store by creating the database directory
+// and opening a SQLite connection. This must be called before any other operations.
 func (vss *VectorStoreService) Init() error {
 	settings := config.Get()
 	dbDir := filepath.Dir(settings.VectorDBFile())
@@ -47,6 +56,8 @@ func (vss *VectorStoreService) Init() error {
 	return nil
 }
 
+// Close closes the SQLite database connection.
+// This should be called when the service is no longer needed.
 func (vss *VectorStoreService) Close() error {
 	if vss.db != nil {
 		return vss.db.Close()
@@ -54,15 +65,21 @@ func (vss *VectorStoreService) Close() error {
 	return nil
 }
 
+// ensureSessionTable creates the vector table for a session if it doesn't exist.
+// Each session uses a separate table named "session_vec_{sessionID}" to isolate
+// vector data between different conversations.
 func (vss *VectorStoreService) ensureSessionTable(sessionID int64) error {
 	tableName := fmt.Sprintf("session_vec_%d", sessionID)
 
+	// Check if table already exists to avoid unnecessary CREATE operations
 	var tableNameCheck string
 	err := vss.db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", tableName).Scan(&tableNameCheck)
 	if err == nil {
 		return nil
 	}
 
+	// Create table with message metadata and vector embedding
+	// embedding is stored as BLOB (binary representation of float32 array)
 	createSQL := fmt.Sprintf(`
 		CREATE TABLE %s (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,13 +94,28 @@ func (vss *VectorStoreService) ensureSessionTable(sessionID int64) error {
 	return err
 }
 
+// VectorMetadata contains the metadata associated with a vector entry.
+// This information is stored alongside the embedding for retrieval.
 type VectorMetadata struct {
-	MessageID int64  `json:"message_id"`
-	Role      string `json:"role"`
-	Content   string `json:"content"`
+	// MessageID is the unique identifier of the original message
+	MessageID int64 `json:"message_id"`
+	// Role indicates whether the message is from "user" or "assistant"
+	Role string `json:"role"`
+	// Content is the original text content of the message
+	Content string `json:"content"`
 }
 
+// AddMessages generates embeddings for the given contents and stores them
+// in the vector database. Each message is associated with its metadata
+// for later retrieval during search operations.
+//
+// Parameters:
+//   - sessionID: the session identifier to group related messages
+//   - messageIDs: the unique identifiers of the messages (currently unused but kept for future use)
+//   - contents: the text contents to be embedded
+//   - metadatas: the metadata for each message
 func (vss *VectorStoreService) AddMessages(sessionID int64, messageIDs []int64, contents []string, metadatas []VectorMetadata) error {
+	// Skip if embedding service is not configured
 	if vss.embeddingSvc == nil {
 		applogger.L.Warn("Embedding service not available, skipping vector store add")
 		return nil
@@ -93,11 +125,13 @@ func (vss *VectorStoreService) AddMessages(sessionID int64, messageIDs []int64, 
 		return fmt.Errorf("failed to ensure session table: %w", err)
 	}
 
+	// Generate embeddings for all contents in a single batch request
 	embeddings, err := vss.embeddingSvc.Embed(context.Background(), contents)
 	if err != nil {
 		return fmt.Errorf("failed to generate embeddings: %w", err)
 	}
 
+	// Insert each embedding with its metadata into the database
 	tableName := fmt.Sprintf("session_vec_%d", sessionID)
 	for i, embedding := range embeddings {
 		blob := float32SliceToBlob(embedding)
@@ -118,13 +152,28 @@ func (vss *VectorStoreService) AddMessages(sessionID int64, messageIDs []int64, 
 	return nil
 }
 
+// SearchResult represents a single search result from the vector store.
 type SearchResult struct {
-	MessageID int64   `json:"message_id"`
-	Role      string  `json:"role"`
-	Content   string  `json:"content"`
-	Score     float64 `json:"score"`
+	// MessageID is the identifier of the matching message
+	MessageID int64 `json:"message_id"`
+	// Role indicates whether the message is from "user" or "assistant"
+	Role string `json:"role"`
+	// Content is the original text content of the message
+	Content string `json:"content"`
+	// Score is the cosine similarity score (higher means more similar)
+	Score float64 `json:"score"`
 }
 
+// Search performs a semantic search across all messages in a session.
+// It finds the k most similar messages to the query based on cosine similarity
+// of their vector embeddings.
+//
+// Parameters:
+//   - sessionID: the session to search within
+//   - query: the search query text
+//   - k: the maximum number of results to return
+//
+// Returns the top-k most similar messages sorted by descending similarity score.
 func (vss *VectorStoreService) Search(sessionID int64, query string, k int) ([]SearchResult, error) {
 	if vss.embeddingSvc == nil {
 		return nil, fmt.Errorf("embedding service not available")
@@ -134,11 +183,15 @@ func (vss *VectorStoreService) Search(sessionID int64, query string, k int) ([]S
 		return nil, fmt.Errorf("failed to ensure session table: %w", err)
 	}
 
+	// Generate embedding for the search query
 	queryEmbedding, err := vss.embeddingSvc.EmbedSingle(context.Background(), query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate query embedding: %w", err)
 	}
 
+	// Retrieve all vectors from the session table
+	// Note: This loads all vectors into memory for similarity computation.
+	// For large datasets, consider using a dedicated vector database with indexing.
 	tableName := fmt.Sprintf("session_vec_%d", sessionID)
 	rows, err := vss.db.Query(fmt.Sprintf("SELECT message_id, role, content, embedding FROM %s", tableName))
 	if err != nil {
@@ -146,6 +199,7 @@ func (vss *VectorStoreService) Search(sessionID int64, query string, k int) ([]S
 	}
 	defer rows.Close()
 
+	// Internal struct to hold candidates during sorting
 	type candidate struct {
 		MessageID int64
 		Role      string
@@ -153,6 +207,7 @@ func (vss *VectorStoreService) Search(sessionID int64, query string, k int) ([]S
 		Score     float64
 	}
 
+	// Compute similarity scores for all stored vectors
 	var candidates []candidate
 	for rows.Next() {
 		var msgID int64
@@ -172,6 +227,8 @@ func (vss *VectorStoreService) Search(sessionID int64, query string, k int) ([]S
 		})
 	}
 
+	// Sort candidates by score in descending order using simple bubble sort
+	// Note: For better performance with large result sets, use sort.Slice or a heap
 	for i := 0; i < len(candidates); i++ {
 		for j := i + 1; j < len(candidates); j++ {
 			if candidates[j].Score > candidates[i].Score {
@@ -180,10 +237,12 @@ func (vss *VectorStoreService) Search(sessionID int64, query string, k int) ([]S
 		}
 	}
 
+	// Limit results to k
 	if k > len(candidates) {
 		k = len(candidates)
 	}
 
+	// Convert top candidates to SearchResult
 	results := make([]SearchResult, 0, k)
 	for i := 0; i < k; i++ {
 		results = append(results, SearchResult{
@@ -197,54 +256,89 @@ func (vss *VectorStoreService) Search(sessionID int64, query string, k int) ([]S
 	return results, nil
 }
 
+// DeleteSession removes all vector data for a session by dropping its table.
+// This should be called when a session is deleted to free up storage space.
 func (vss *VectorStoreService) DeleteSession(sessionID int64) error {
 	tableName := fmt.Sprintf("session_vec_%d", sessionID)
 	_, err := vss.db.Exec(fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName))
 	return err
 }
 
+// cosineSimilarity computes the cosine similarity between two vectors.
+// Cosine similarity measures the angle between two vectors, with values
+// ranging from -1 (opposite) to 1 (identical direction).
+//
+// Formula: cos(a, b) = (a · b) / (||a|| * ||b||)
+// where a · b is the dot product and ||a|| is the Euclidean norm.
 func cosineSimilarity(a, b []float32) float64 {
 	if len(a) != len(b) {
 		return 0
 	}
+
 	var dotProduct, normA, normB float64
+
+	// Compute dot product and norms in a single pass
 	for i := range a {
 		dotProduct += float64(a[i]) * float64(b[i])
 		normA += float64(a[i]) * float64(a[i])
 		normB += float64(b[i]) * float64(b[i])
 	}
+
+	// Handle zero vectors to avoid division by zero
 	if normA == 0 || normB == 0 {
 		return 0
 	}
+
 	return dotProduct / (math.Sqrt(normA) * math.Sqrt(normB))
 }
 
+// float32SliceToBlob converts a float32 slice to a binary blob for SQLite storage.
+// Each float32 is encoded as 4 bytes using IEEE 754 binary representation
+// in little-endian byte order.
+//
+// This encoding is efficient (no serialization overhead) and portable
+// (IEEE 754 is a universal standard for floating-point numbers).
 func float32SliceToBlob(slice []float32) []byte {
+	// Each float32 occupies 4 bytes
 	buf := make([]byte, len(slice)*4)
+
 	for i, v := range slice {
+		// Get the IEEE 754 binary representation of the float32
 		bits := math.Float32bits(v)
+
+		// Store in little-endian order (least significant byte first)
+		// This matches the native byte order on x86 and ARM processors
 		buf[i*4] = byte(bits)
 		buf[i*4+1] = byte(bits >> 8)
 		buf[i*4+2] = byte(bits >> 16)
 		buf[i*4+3] = byte(bits >> 24)
 	}
+
 	return buf
 }
 
+// blobToFloat32Slice converts a binary blob back to a float32 slice.
+// This is the inverse operation of float32SliceToBlob.
+// Returns nil if the blob length is not a multiple of 4.
 func blobToFloat32Slice(blob []byte) []float32 {
+	// Validate that blob length is valid (must be multiple of 4)
 	if len(blob)%4 != 0 {
 		return nil
 	}
+
 	slice := make([]float32, len(blob)/4)
+
 	for i := range slice {
-		bits := uint32(blob[i*4]) | uint32(blob[i*4+1])<<8 | uint32(blob[i*4+2])<<16 | uint32(blob[i*4+3])<<24
+		// Reconstruct the uint32 from little-endian bytes
+		bits := uint32(blob[i*4]) |
+			uint32(blob[i*4+1])<<8 |
+			uint32(blob[i*4+2])<<16 |
+			uint32(blob[i*4+3])<<24
+
+		// Convert the bit pattern back to float32
+		// This reinterprets the bits without any numerical conversion
 		slice[i] = math.Float32frombits(bits)
 	}
-	return slice
-}
 
-func init() {
-	_ = json.Marshal
-	_ = strconv.Atoi
-	_ = strings.TrimSpace
+	return slice
 }
