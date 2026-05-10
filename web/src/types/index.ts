@@ -52,6 +52,7 @@ export interface Agent {
   embedding_config_id: number;
   description: string;
   avatar: string;
+  knowledge_base_ids: number[];
   created_at: string;
   updated_at: string | null;
 }
@@ -96,4 +97,42 @@ export interface SearchConfig {
   description: string;
   is_active: boolean;
   updated_at: string | null;
+}
+
+export interface KnowledgeBase {
+  id: number;
+  name: string;
+  description: string;
+  embedding_config_id: number;
+  index_type: string;
+  index_file_path: string;
+  document_count: number;
+  vector_count: number;
+  deleted_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Document {
+  id: number;
+  knowledge_base_id: number;
+  title: string;
+  source: string;
+  file_path: string;
+  file_size: number;
+  file_type: string;
+  chunk_count: number;
+  status: string;
+  error_message: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SearchResult {
+  chunk_id: number;
+  document_id: number;
+  document_title: string;
+  content: string;
+  score: number;
+  knowledge_base_id: number;
 }

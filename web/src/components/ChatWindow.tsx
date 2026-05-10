@@ -10,15 +10,42 @@ import InteractionModal from './InteractionModal';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Message, Session, Agent, Interaction } from '../types';
-import { HAS_INTERACTIONS_PENDING, HAS_INTERACTIONS_EXISTS } from '../types';
+import { HAS_INTERACTIONS_PENDING, HAS_INTERACTIONS_EXISTS, MESSAGE_STATUS_COMPLETED } from '../types';
 import { messageApi, sessionApi, agentApi, interactionApi, getDynamicApiBaseUrl } from '../services/api';
 import { logger, MESSAGE_STATUS_STREAMING, SESSION_STATUS_STREAMING } from '../logger';
 
+/**
+ * Props for the ChatWindow component.
+ */
 interface ChatWindowProps {
   session: Session | null;
   onSessionCreated?: (sessionId: number) => void;
 }
 
+/**
+ * ChatWindow component handles the complete chat interface including:
+ * - Message display with streaming support
+ * - SSE (Server-Sent Events) connection management
+ * - Interaction polling for agent messages
+ * - Session state transitions (temp to real)
+ * 
+ * Key state management:
+ * - messages: Array of all messages in the session
+ * - streamingMessage: Content being streamed from SSE
+ * - isStreaming: Whether SSE connection is active
+ * - eventSourceRef: Reference to the current EventSource connection
+ * 
+ * SSE Flow:
+ * 1. User sends message -> POST /chat/send creates user_msg + ai_msg placeholders
+ * 2. Frontend connects to GET /chat/stream/{sessionId} via EventSource
+ * 3. Server sends 'existing' event (if reconnecting) or 'chunk' events
+ * 4. 'done' event signals completion, frontend updates message status
+ * 
+ * Interaction Polling:
+ * - Agent messages start with has_interactions=PENDING
+ * - Frontend polls GET /interactions/{msgId}/status every 2s
+ * - When status changes to EXISTS or NONE, polling stops
+ */
 const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) => {
   const { t } = useTranslation();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -30,6 +57,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
   const [interactionModalVisible, setInteractionModalVisible] = useState(false);
   const [selectedInteractions, setSelectedInteractions] = useState<Interaction[]>([]);
   const [interactionsLoading, setInteractionsLoading] = useState(false);
+  
+  // Refs for managing async state and preventing race conditions
   const pollingRef = useRef<Map<number, ReturnType<typeof setInterval>>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const chatMessagesRef = useRef<HTMLDivElement>(null);
@@ -37,6 +66,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
   const prevSessionIdRef = useRef<number | null>(null);
   const currentLoadIdRef = useRef<number>(0);
   const isInitialLoadRef = useRef<boolean>(true);
+  const skipLoadRef = useRef<boolean>(false);
+  const loadMessagesRef = useRef<() => void>(() => {});
+  const streamingMessageRef = useRef<string>('');
 
   const isTempSession = session?.id === -1;
 
@@ -63,10 +95,37 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
     logger.debug('Messages updated:', messages.length, messages.map(m => ({ id: m.id, role: m.role, status: m.status, contentLength: m.content.length })));
   }, [messages]);
 
+  /**
+   * Handles session ID changes and manages EventSource lifecycle.
+   * 
+   * Special case: Temp session (id=-1) transitioning to real session
+   * - When user sends first message in a new session, backend creates a real session
+   * - Frontend receives the real session ID via SSE 'session_created' event
+   * - We must preserve the streaming state and EventSource connection
+   * - Skip loadMessages() to avoid overwriting the streaming UI
+   * 
+   * Normal case: Session switch or component unmount
+   * - Close existing EventSource connection
+   * - Reset streaming state
+   * - Increment loadId to invalidate any pending loadMessages calls
+   * - Clear messages and input
+   */
   useEffect(() => {
     const prevId = prevSessionIdRef.current;
     const currentId = session?.id ?? null;
     
+    // Check if this is a temp-to-real session transition
+    const isTempToReal = prevId === -1 && currentId !== null && currentId !== -1;
+    if (isTempToReal) {
+      // Temp session transitioning to real: preserve streaming state and EventSource.
+      // Messages are already set by handleSend, SSE is already connected.
+      // Skip loadMessages to avoid overwriting the streaming UI.
+      prevSessionIdRef.current = currentId;
+      skipLoadRef.current = true;
+      return;
+    }
+    
+    // Normal session change: close EventSource and reset state
     if (eventSourceRef.current) {
       logger.info('Closing EventSource on session change');
       eventSourceRef.current.close();
@@ -76,16 +135,16 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
     setIsStreaming(false);
     currentLoadIdRef.current += 1;
     
-    const isTempToReal = prevId === -1 && currentId !== null && currentId !== -1;
-    if (!isTempToReal) {
-      setMessages([]);
-      setStreamingMessage('');
-      isInitialLoadRef.current = true;
-    }
+    setMessages([]);
+    setStreamingMessage('');
+    isInitialLoadRef.current = true;
     setInputValue('');
     
     prevSessionIdRef.current = currentId;
-    
+  }, [session?.id]);
+
+  // Close EventSource on component unmount
+  useEffect(() => {
     return () => {
       if (eventSourceRef.current) {
         logger.info('Closing EventSource on unmount');
@@ -93,21 +152,45 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
         eventSourceRef.current = null;
       }
     };
-  }, [session?.id]);
+  }, []);
 
+  /**
+   * Loads messages for the current session with race condition handling.
+   * 
+   * Race condition prevention:
+   * - Uses currentLoadIdRef to track the latest load request
+   * - If session changes while loading, stale responses are ignored
+   * - Ensures UI always reflects the correct session's messages
+   * 
+   * SSE reconnection handling:
+   * - If session status is STREAMING, looks for streaming message
+   * - Reconnects to SSE stream with existing content
+   * - Handles page refresh during streaming
+   * 
+   * @returns Promise<void>
+   */
   const loadMessages = useCallback(async () => {
     if (!session || isTempSession) return;
+
+    // Skip loading if this is a temp-to-real transition
+    if (skipLoadRef.current) {
+      skipLoadRef.current = false;
+      return;
+    }
     
+    // Generate unique ID for this load request
     const loadId = ++currentLoadIdRef.current;
     logger.info('Loading messages for session:', session.id, 'loadId:', loadId);
     
     setLoading(true);
     try {
+      // Fetch messages and session status in parallel
       const [messagesRes, sessionRes] = await Promise.all([
         messageApi.list(session.id),
         sessionApi.get(session.id)
       ]);
       
+      // Ignore stale responses from previous load requests
       if (loadId !== currentLoadIdRef.current) {
         logger.info('Stale loadMessages response ignored, loadId:', loadId);
         return;
@@ -116,6 +199,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
       logger.info('Messages loaded:', messagesRes.data.length, 'Session status:', sessionRes.data.status);
       setMessages(messagesRes.data);
       
+      // Handle SSE reconnection for streaming sessions
       if (sessionRes.data.status === SESSION_STATUS_STREAMING) {
         const streamingMsg = messagesRes.data.find(m => m.status === MESSAGE_STATUS_STREAMING);
         if (streamingMsg) {
@@ -143,8 +227,47 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
   }, [session, isTempSession]);
 
   useEffect(() => {
+    loadMessagesRef.current = loadMessages;
+  }, [loadMessages]);
+
+  useEffect(() => {
     loadMessages();
   }, [loadMessages]);
+
+  /**
+   * Starts polling for interaction status on an agent message.
+   * 
+   * Interaction status values:
+   * - PENDING (0): Agent is still processing, continue polling
+   * - EXISTS (1): Agent has interactions, show view button
+   * - NONE (2): Agent has no interactions, hide interaction UI
+   * 
+   * Polling stops automatically when status changes from PENDING.
+   * 
+   * @param aiMessageId - The agent message ID to poll
+   */
+  const startPolling = (aiMessageId: number) => {
+    // Avoid duplicate polling for the same message
+    if (pollingRef.current.has(aiMessageId)) return;
+
+    const timer = setInterval(async () => {
+      try {
+        const res = await interactionApi.getInteractionStatus(aiMessageId);
+        const status = res.data.has_interactions;
+        // Stop polling when status is no longer PENDING
+        if (status !== HAS_INTERACTIONS_PENDING) {
+          setMessages(prev => prev.map(m =>
+            m.id === aiMessageId ? { ...m, has_interactions: status } : m
+          ));
+          clearInterval(timer);
+          pollingRef.current.delete(aiMessageId);
+        }
+      } catch (err) {
+        logger.error('Failed to poll interaction status:', err);
+      }
+    }, 2000); // Poll every 2 seconds
+    pollingRef.current.set(aiMessageId, timer);
+  };
 
   // Poll for interaction status on agent messages with has_interactions=PENDING
   useEffect(() => {
@@ -153,24 +276,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
     );
 
     pendingAgentMessages.forEach(msg => {
-      if (!pollingRef.current.has(msg.id)) {
-        const timer = setInterval(async () => {
-          try {
-            const res = await interactionApi.getInteractionStatus(msg.id);
-            const status = res.data.has_interactions;
-            if (status !== HAS_INTERACTIONS_PENDING) {
-              setMessages(prev => prev.map(m =>
-                m.id === msg.id ? { ...m, has_interactions: status } : m
-              ));
-              clearInterval(timer);
-              pollingRef.current.delete(msg.id);
-            }
-          } catch (err) {
-            logger.error('Failed to poll interaction status:', err);
-          }
-        }, 2000);
-        pollingRef.current.set(msg.id, timer);
-      }
+      startPolling(msg.id);
     });
 
     return () => {
@@ -213,7 +319,26 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
     chatMessagesRef.current.scrollTop = chatMessagesRef.current.scrollHeight;
   }, [streamingMessage]);
 
+  /**
+   * Establishes SSE connection for streaming chat responses.
+   * 
+   * SSE Event Types:
+   * - 'existing': Sent on reconnection, contains already-streamed content
+   * - 'chunk': Incremental content chunks during streaming
+   * - 'done': Signals completion, triggers message status update
+   * - 'error': Server-side error, displays error message
+   * - 'session_created': New session ID for temp sessions
+   * 
+   * State management:
+   * - streamingMessageRef: Accumulates all chunks for final update
+   * - isStreaming: Controls streaming UI state
+   * - eventSourceRef: Manages connection lifecycle
+   * 
+   * @param sessionId - The session ID to connect to
+   * @param loadId - Optional load ID for race condition prevention
+   */
   const connectToStream = (sessionId: number, loadId?: number) => {
+    // Close existing connection if any
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
@@ -237,14 +362,31 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
         
         if (data.type === 'existing') {
           logger.info('Received existing content:', data.content.length, 'chars');
+          streamingMessageRef.current = data.content;
           setStreamingMessage(data.content);
         } else if (data.type === 'chunk') {
+          streamingMessageRef.current += data.content;
           setStreamingMessage(prev => prev + data.content);
         } else if (data.type === 'done') {
-          logger.info('SSE stream completed');
+          logger.info('SSE stream completed, streamingMessageRef.current length:', streamingMessageRef.current.length);
           setIsStreaming(false);
-          loadMessages();
           setStreamingMessage('');
+          
+          const finalContent = streamingMessageRef.current;
+          streamingMessageRef.current = '';
+          
+          setMessages(prev => {
+            const updated = prev.map(m => {
+              if (m.role === 'assistant' && m.status === MESSAGE_STATUS_STREAMING) {
+                logger.info('Updating AI message with content length:', finalContent.length);
+                return { ...m, content: finalContent, status: MESSAGE_STATUS_COMPLETED };
+              }
+              return m;
+            });
+            logger.info('Messages updated, AI message content length:', updated.find(m => m.role === 'assistant' && m.status === MESSAGE_STATUS_COMPLETED)?.content.length);
+            return updated;
+          });
+          
           eventSource.close();
           eventSourceRef.current = null;
         } else if (data.type === 'error') {
@@ -284,6 +426,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
         );
         
         const newSessionId = response.data.session_id;
+        const aiMessageId = response.data.ai_message_id;
         
         const userMessage: Message = {
           id: response.data.trigger_message_id,
@@ -296,17 +439,35 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
           updated_at: new Date().toISOString(),
         };
         
-        setMessages([userMessage]);
+        const aiMessage: Message = {
+          id: aiMessageId,
+          session_id: newSessionId,
+          role: 'assistant',
+          content: '',
+          status: 0,
+          has_interactions: 0,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        
+        setMessages([userMessage, aiMessage]);
         setInputValue('');
         setStreamingMessage('');
+        streamingMessageRef.current = '';
         setIsStreaming(true);
         
+        startPolling(aiMessageId);
+
         if (onSessionCreated) {
           onSessionCreated(newSessionId);
         }
+
+        connectToStream(newSessionId);
       } else {
+        const response = await messageApi.send(session.id, inputValue);
+        
         const userMessage: Message = {
-          id: Date.now(),
+          id: response.data.trigger_message_id,
           session_id: session.id,
           role: 'user',
           content: inputValue,
@@ -316,25 +477,27 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ session, onSessionCreated }) =>
           updated_at: new Date().toISOString(),
         };
         
-        setMessages(prev => [...prev, userMessage]);
+        const aiMessageId = response.data.ai_message_id;
+        const aiMessage: Message = {
+          id: aiMessageId,
+          session_id: session.id,
+          role: 'assistant',
+          content: '',
+          status: 0,
+          has_interactions: 0,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        
+        setMessages(prev => [...prev, userMessage, aiMessage]);
         setInputValue('');
         setStreamingMessage('');
+        streamingMessageRef.current = '';
         setIsStreaming(true);
         
-        await messageApi.send(session.id, inputValue);
+        startPolling(aiMessageId);
         
-        const [messagesRes, sessionRes] = await Promise.all([
-          messageApi.list(session.id),
-          sessionApi.get(session.id)
-        ]);
-        
-        setMessages(messagesRes.data);
-        
-        if (sessionRes.data.status === SESSION_STATUS_STREAMING) {
-          connectToStream(session.id);
-        } else {
-          setIsStreaming(false);
-        }
+        connectToStream(session.id);
       }
     } catch (error: any) {
       logger.error('Failed to send message:', error);

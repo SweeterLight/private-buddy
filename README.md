@@ -16,6 +16,7 @@ You can:
 - Create multiple AI agents with different prompts
 - Chat with them and keep history
 - Delegate tasks to agents for real-world execution
+- Build knowledge bases and bind them to agents for RAG-enhanced chat
 
 More features will be added gradually.
 

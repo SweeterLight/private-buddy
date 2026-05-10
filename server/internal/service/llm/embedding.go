@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"math"
 
 	openai "github.com/sashabaranov/go-openai"
 )
@@ -39,11 +40,28 @@ func (es *EmbeddingService) Embed(ctx context.Context, texts []string) ([][]floa
 	}
 
 	result := make([][]float32, 0, len(resp.Data))
-	for _, d := range resp.Data {
-		result = append(result, d.Embedding)
+	for i, d := range resp.Data {
+		emb := d.Embedding
+		if !isValidEmbedding(emb) {
+			return nil, fmt.Errorf("invalid embedding returned for text[%d]: empty or contains NaN/Inf", i)
+		}
+		result = append(result, emb)
 	}
 
 	return result, nil
+}
+
+// isValidEmbedding checks if an embedding vector is valid.
+func isValidEmbedding(emb []float32) bool {
+	if len(emb) == 0 {
+		return false
+	}
+	for _, v := range emb {
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			return false
+		}
+	}
+	return true
 }
 
 // EmbedSingle generates an embedding for a single text.

@@ -3,6 +3,10 @@
 // This package implements the Go equivalent of Python's LLMService and TokenUsageLogger,
 // providing utilities for creating chat model instances and tracking token usage/latency.
 // All LLM calls automatically log token usage and latency in the same format as Python.
+//
+// All external types (Message, ToolCall, FunctionDefinition, ToolResponse) are package-level
+// abstractions that decouple callers from the underlying OpenAI SDK. SDK types are confined
+// to internal conversion functions within this package.
 package llm
 
 import (
@@ -30,6 +34,49 @@ const (
 	TemperatureControlled    float32 = 0.3
 	TemperatureCreative      float32 = 0.7
 )
+
+// Message represents a chat message in the LLM conversation.
+// This is the universal message type used across the entire application,
+// covering all OpenAI chat completion message roles:
+//   - system: Role + Content
+//   - user: Role + Content
+//   - assistant: Role + Content + ToolCalls (optional)
+//   - tool: Role + Content + ToolCallID
+type Message struct {
+	Role       string     `json:"role"`
+	Content    string     `json:"content,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+// ToolCall represents a single tool call returned by the LLM in an assistant message.
+type ToolCall struct {
+	ID       string       `json:"id"`
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
+}
+
+// ToolFunction represents the function details of a tool call.
+type ToolFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// FunctionDefinition defines the schema for a tool that the LLM can call.
+// This is the application-level abstraction over the OpenAI SDK's function definition type.
+type FunctionDefinition struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description,omitempty"`
+	Parameters  map[string]interface{} `json:"parameters"`
+}
+
+// ToolResponse represents the LLM response from a tool-calling chat completion.
+// Decouples callers from the OpenAI SDK's ChatCompletionResponse type.
+type ToolResponse struct {
+	Content      string     `json:"content"`
+	ToolCalls    []ToolCall `json:"tool_calls"`
+	FinishReason string     `json:"finish_reason"`
+}
 
 // ChatModel wraps an OpenAI client with model configuration for chat completions.
 // It supports multiple call modes: plain chat, streaming, tool-calling, and JSON schema output.
@@ -69,27 +116,107 @@ func NewChatModelWithTemperature(baseURL, apiKey, modelID string, temperature fl
 	}
 }
 
-// ChatMessage represents a simple chat message with role and content.
-// Used for plain chat, streaming, and JSON schema calls where tool_calls are not needed.
-type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
+// --- Internal conversion functions ---
+// These confine all openai SDK types within this package.
 
-// buildRequest constructs a ChatCompletionRequest from ChatMessage slice.
-// Temperature is only included when explicitly set (> 0).
-func (cm *ChatModel) buildRequest(messages []ChatMessage) openai.ChatCompletionRequest {
-	var reqMessages []openai.ChatCompletionMessage
+// toOpenAIMessages converts Message slice to OpenAI ChatCompletionMessage slice.
+func toOpenAIMessages(messages []Message) []openai.ChatCompletionMessage {
+	result := make([]openai.ChatCompletionMessage, 0, len(messages))
 	for _, m := range messages {
-		reqMessages = append(reqMessages, openai.ChatCompletionMessage{
+		msg := openai.ChatCompletionMessage{
 			Role:    m.Role,
 			Content: m.Content,
+		}
+		if len(m.ToolCalls) > 0 {
+			msg.ToolCalls = toOpenAIToolCalls(m.ToolCalls)
+		}
+		if m.ToolCallID != "" {
+			msg.ToolCallID = m.ToolCallID
+		}
+		result = append(result, msg)
+	}
+	return result
+}
+
+// toOpenAIToolCalls converts ToolCall slice to OpenAI ToolCall slice.
+func toOpenAIToolCalls(tcs []ToolCall) []openai.ToolCall {
+	result := make([]openai.ToolCall, 0, len(tcs))
+	for _, tc := range tcs {
+		result = append(result, openai.ToolCall{
+			ID:   tc.ID,
+			Type: openai.ToolType(tc.Type),
+			Function: openai.FunctionCall{
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			},
 		})
 	}
+	return result
+}
 
+// toOpenAIToolDefs converts FunctionDefinition slice to OpenAI Tool slice.
+func toOpenAIToolDefs(defs []FunctionDefinition) []openai.Tool {
+	result := make([]openai.Tool, 0, len(defs))
+	for _, d := range defs {
+		d := d
+		result = append(result, openai.Tool{
+			Type: openai.ToolTypeFunction,
+			Function: &openai.FunctionDefinition{
+				Name:        d.Name,
+				Description: d.Description,
+				Parameters:  d.Parameters,
+			},
+		})
+	}
+	return result
+}
+
+// fromOpenAIToolCalls converts OpenAI ToolCall slice to ToolCall slice.
+func fromOpenAIToolCalls(tcs []openai.ToolCall) []ToolCall {
+	result := make([]ToolCall, 0, len(tcs))
+	for _, tc := range tcs {
+		result = append(result, ToolCall{
+			ID:   tc.ID,
+			Type: string(tc.Type),
+			Function: ToolFunction{
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			},
+		})
+	}
+	return result
+}
+
+// fromOpenAIResponse converts OpenAI ChatCompletionResponse to ToolResponse.
+func fromOpenAIResponse(resp *openai.ChatCompletionResponse) ToolResponse {
+	if len(resp.Choices) == 0 {
+		return ToolResponse{}
+	}
+	choice := resp.Choices[0]
+	return ToolResponse{
+		Content:      choice.Message.Content,
+		ToolCalls:    fromOpenAIToolCalls(choice.Message.ToolCalls),
+		FinishReason: string(choice.FinishReason),
+	}
+}
+
+// --- Logging helpers ---
+
+// logMessages logs input messages at debug level for traceability.
+func logMessages(messages []Message) {
+	for i, m := range messages {
+		applogger.L.Debug("llm input", "index", i, "role", m.Role, "content", m.Content, "tool_calls", len(m.ToolCalls), "tool_call_id", m.ToolCallID)
+	}
+}
+
+// --- Request builders ---
+
+// buildRequest constructs a ChatCompletionRequest from Message slice.
+// Temperature is only included when explicitly set (> 0).
+func (cm *ChatModel) buildRequest(messages []Message) openai.ChatCompletionRequest {
 	req := openai.ChatCompletionRequest{
 		Model:    cm.modelID,
-		Messages: reqMessages,
+		Messages: toOpenAIMessages(messages),
 	}
 
 	if cm.temperature > 0 {
@@ -99,9 +226,13 @@ func (cm *ChatModel) buildRequest(messages []ChatMessage) openai.ChatCompletionR
 	return req
 }
 
+// --- Public API methods ---
+
 // Chat sends a non-streaming chat completion request and returns the response content.
 // Used by services that need a single complete response: summary, narrative, user state, etc.
-func (cm *ChatModel) Chat(ctx context.Context, messages []ChatMessage) (string, error) {
+func (cm *ChatModel) Chat(ctx context.Context, messages []Message) (string, error) {
+	logMessages(messages)
+
 	req := cm.buildRequest(messages)
 
 	start := time.Now()
@@ -117,16 +248,27 @@ func (cm *ChatModel) Chat(ctx context.Context, messages []ChatMessage) (string, 
 		return "", fmt.Errorf("no response choices returned")
 	}
 
+	content := resp.Choices[0].Message.Content
+	applogger.L.Debug("llm output", "model", cm.modelID, "content", content)
+
 	logTokenUsage(latencyMs, resp.Usage, cm.modelID)
 
-	return resp.Choices[0].Message.Content, nil
+	return content, nil
+}
+
+// Stream wraps an OpenAI streaming response, hiding the SDK type from callers.
+// Must be consumed via ConsumeStream. Automatically closed when consumption completes.
+type Stream struct {
+	inner *openai.ChatCompletionStream
 }
 
 // ChatStream initiates a streaming chat completion request.
-// Returns a stream that must be consumed via ConsumeStream.
+// Returns a Stream that must be consumed via ConsumeStream.
 // Used for real-time SSE streaming of LLM responses to the frontend.
 // StreamOptions.IncludeUsage is set to true to capture token usage in the final chunk.
-func (cm *ChatModel) ChatStream(ctx context.Context, messages []ChatMessage) (*openai.ChatCompletionStream, error) {
+func (cm *ChatModel) ChatStream(ctx context.Context, messages []Message) (*Stream, error) {
+	logMessages(messages)
+
 	req := cm.buildRequest(messages)
 	req.Stream = true
 	req.StreamOptions = &openai.StreamOptions{
@@ -134,7 +276,7 @@ func (cm *ChatModel) ChatStream(ctx context.Context, messages []ChatMessage) (*o
 	}
 
 	start := time.Now()
-	stream, err := cm.client.CreateChatCompletionStream(ctx, req)
+	inner, err := cm.client.CreateChatCompletionStream(ctx, req)
 	latencyMs := float64(time.Since(start).Milliseconds())
 
 	if err != nil {
@@ -144,18 +286,20 @@ func (cm *ChatModel) ChatStream(ctx context.Context, messages []ChatMessage) (*o
 
 	applogger.L.Debug("llm stream started", "model", cm.modelID, "connect_latency_ms", latencyMs)
 
-	return stream, nil
+	return &Stream{inner: inner}, nil
 }
 
 // ChatWithTools sends a non-streaming chat completion request with tool definitions.
 // Used by the task loop's ReAct pattern where the LLM decides which tools to call.
 // This is the Go equivalent of Python's TaskLLMClient.invoke(), using the OpenAI Tools API
 // (not the deprecated Functions API) for proper tool_calls support.
-func (cm *ChatModel) ChatWithTools(ctx context.Context, messages []openai.ChatCompletionMessage, toolDefs []openai.Tool) (*openai.ChatCompletionResponse, error) {
+func (cm *ChatModel) ChatWithTools(ctx context.Context, messages []Message, toolDefs []FunctionDefinition) (ToolResponse, error) {
+	logMessages(messages)
+
 	req := openai.ChatCompletionRequest{
 		Model:    cm.modelID,
-		Messages: messages,
-		Tools:    toolDefs,
+		Messages: toOpenAIMessages(messages),
+		Tools:    toOpenAIToolDefs(toolDefs),
 	}
 
 	if cm.temperature > 0 {
@@ -168,12 +312,19 @@ func (cm *ChatModel) ChatWithTools(ctx context.Context, messages []openai.ChatCo
 
 	if err != nil {
 		applogger.L.Error("llm call with tools failed", "model", cm.modelID, "latency_ms", latencyMs, "error", err)
-		return nil, fmt.Errorf("chat completion with tools failed: %w", err)
+		return ToolResponse{}, fmt.Errorf("chat completion with tools failed: %w", err)
+	}
+
+	result := fromOpenAIResponse(&resp)
+
+	applogger.L.Debug("llm output", "model", cm.modelID, "content", result.Content, "tool_calls", len(result.ToolCalls))
+	for i, tc := range result.ToolCalls {
+		applogger.L.Debug("llm output tool_call", "index", i, "id", tc.ID, "name", tc.Function.Name, "arguments", tc.Function.Arguments)
 	}
 
 	logTokenUsage(latencyMs, resp.Usage, cm.modelID)
 
-	return &resp, nil
+	return result, nil
 }
 
 // JSONSchemaDefinition defines a JSON Schema for structured LLM output.
@@ -190,7 +341,9 @@ type JSONSchemaDefinition struct {
 // Forces the LLM to output valid JSON conforming to the provided schema.
 // Used by services that need structured output: user state inference, query routing, requirement rewriting.
 // This matches Python's pattern of using with_structured_output() for deterministic JSON responses.
-func (cm *ChatModel) ChatWithJSONSchema(ctx context.Context, messages []ChatMessage, schemaDef JSONSchemaDefinition) (string, error) {
+func (cm *ChatModel) ChatWithJSONSchema(ctx context.Context, messages []Message, schemaDef JSONSchemaDefinition) (string, error) {
+	logMessages(messages)
+
 	req := cm.buildRequest(messages)
 
 	req.ResponseFormat = &openai.ChatCompletionResponseFormat{
@@ -216,9 +369,12 @@ func (cm *ChatModel) ChatWithJSONSchema(ctx context.Context, messages []ChatMess
 		return "", fmt.Errorf("no response choices returned")
 	}
 
+	content := resp.Choices[0].Message.Content
+	applogger.L.Debug("llm output", "model", cm.modelID, "schema", schemaDef.Name, "content", content)
+
 	logTokenUsage(latencyMs, resp.Usage, cm.modelID)
 
-	return resp.Choices[0].Message.Content, nil
+	return content, nil
 }
 
 // StreamHandler is a callback function invoked for each chunk received from a streaming response.
@@ -242,8 +398,8 @@ func logTokenUsage(latencyMs float64, usage openai.Usage, model string) {
 // ConsumeStream reads all chunks from a streaming response, invoking the handler for each chunk.
 // Returns the full accumulated content when the stream completes.
 // Token usage is logged if available in the final stream chunk (via StreamOptions.IncludeUsage).
-func (cm *ChatModel) ConsumeStream(stream *openai.ChatCompletionStream, handler StreamHandler) (string, error) {
-	defer stream.Close()
+func (cm *ChatModel) ConsumeStream(stream *Stream, handler StreamHandler) (string, error) {
+	defer stream.inner.Close()
 
 	start := time.Now()
 	var fullContent string
@@ -251,7 +407,7 @@ func (cm *ChatModel) ConsumeStream(stream *openai.ChatCompletionStream, handler 
 	hasUsage := false
 
 	for {
-		resp, err := stream.Recv()
+		resp, err := stream.inner.Recv()
 		if err == io.EOF {
 			break
 		}
@@ -278,6 +434,8 @@ func (cm *ChatModel) ConsumeStream(stream *openai.ChatCompletionStream, handler 
 	}
 
 	latencyMs := float64(time.Since(start).Milliseconds())
+	applogger.L.Debug("llm output", "model", cm.modelID, "stream", true, "content", fullContent)
+
 	if hasUsage {
 		logTokenUsage(latencyMs, streamUsage, cm.modelID)
 	} else {

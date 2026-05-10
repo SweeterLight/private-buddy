@@ -57,9 +57,9 @@ Output only the clarification question, without any additional content.`
 // QueryRoutingResult represents the structured output of query routing.
 // Defines the expected format when the LLM classifies and processes a user query.
 type QueryRoutingResult struct {
-	Type           string  `json:"type"`
-	RewrittenQuery *string `json:"rewritten_query"`
-	Reason         *string `json:"reason"`
+	Type           string `json:"type"`
+	RewrittenQuery string `json:"rewritten_query"`
+	Reason         string `json:"reason"`
 }
 
 // PreprocessingResult represents the full output of query preprocessing,
@@ -73,42 +73,25 @@ type PreprocessingResult struct {
 	SkipRetrieval      bool   `json:"skip_retrieval"`
 }
 
-// QueryPreprocessingService handles query classification and transformation.
-//
-// This service handles the preprocessing of user queries before they are sent to the
-// retrieval or LLM systems. It includes:
-//   - Query type classification (clear, ambiguous, vague, no_query)
-//   - Query rewriting for ambiguous queries with context
-//   - Clarification generation for vague queries
-//
-// The preprocessing pipeline ensures that queries are optimized for retrieval
-// and LLM processing.
-type QueryPreprocessingService struct{}
-
-// NewQueryPreprocessingService creates a QueryPreprocessingService instance.
-func NewQueryPreprocessingService() *QueryPreprocessingService {
-	return &QueryPreprocessingService{}
-}
-
 // FormatHistoryForPreprocessing formats conversation history for preprocessing prompts.
-// Limits to the most recent maxMessages if specified.
-func (qps *QueryPreprocessingService) FormatHistoryForPreprocessing(history []map[string]string, maxMessages *int) string {
+// Limits to the most recent maxMessages if > 0.
+func FormatHistoryForPreprocessing(history []llm.Message, maxMessages int) string {
 	if len(history) == 0 {
 		return "(No conversation history)"
 	}
 
 	recent := history
-	if maxMessages != nil && len(history) > *maxMessages {
-		recent = history[len(history)-*maxMessages:]
+	if maxMessages > 0 && len(history) > maxMessages {
+		recent = history[len(history)-maxMessages:]
 	}
 
 	var formatted []string
 	for _, msg := range recent {
 		role := "User"
-		if msg["role"] != "user" {
+		if msg.Role != "user" {
 			role = "Assistant"
 		}
-		formatted = append(formatted, fmt.Sprintf("%s: %s", role, msg["content"]))
+		formatted = append(formatted, fmt.Sprintf("%s: %s", role, msg.Content))
 	}
 	return strings.Join(formatted, "\n")
 }
@@ -116,18 +99,18 @@ func (qps *QueryPreprocessingService) FormatHistoryForPreprocessing(history []ma
 // RouteQuery classifies the query type and rewrites if ambiguous.
 // Uses JSON Schema structured output for deterministic classification.
 // Uses TemperatureDeterministic for consistent, deterministic outputs.
-func (qps *QueryPreprocessingService) RouteQuery(
+func RouteQuery(
 	llmConfig *model.LLMConfig,
 	query string,
-	history []map[string]string,
-	maxMessages *int,
+	history []llm.Message,
+	maxMessages int,
 ) *QueryRoutingResult {
 	chatModel := llm.NewChatModelWithTemperature(llmConfig.BaseURL, llmConfig.APIKey, llmConfig.ModelID, llm.TemperatureDeterministic)
 
-	historyText := qps.FormatHistoryForPreprocessing(history, maxMessages)
+	historyText := FormatHistoryForPreprocessing(history, maxMessages)
 	prompt := fmt.Sprintf(routingPrompt, historyText, query)
 
-	result, err := chatModel.ChatWithJSONSchema(stdctx.Background(), []llm.ChatMessage{
+	result, err := chatModel.ChatWithJSONSchema(stdctx.Background(), []llm.Message{
 		{Role: "user", Content: prompt},
 	}, llm.JSONSchemaDefinition{
 		Name:        "QueryRoutingResult",
@@ -163,8 +146,8 @@ func (qps *QueryPreprocessingService) RouteQuery(
 		var routing QueryRoutingResult
 		if err := json.Unmarshal([]byte(result), &routing); err == nil {
 			applogger.L.Info("Query routing result", "type", routing.Type)
-			if routing.Type == queryTypeAmbiguous && routing.RewrittenQuery != nil {
-				applogger.L.Info("Query rewritten", "original", query[:minLen(50, len(query))], "rewritten", (*routing.RewrittenQuery)[:minLen(50, len(*routing.RewrittenQuery))])
+			if routing.Type == queryTypeAmbiguous && routing.RewrittenQuery != "" {
+				applogger.L.Info("Query rewritten", "original", query[:min(50, len(query))], "rewritten", routing.RewrittenQuery[:min(50, len(routing.RewrittenQuery))])
 			}
 			return &routing
 		}
@@ -174,27 +157,26 @@ func (qps *QueryPreprocessingService) RouteQuery(
 }
 
 // GenerateClarification generates a clarification question for vague queries.
-// If characterSettings is provided, it is prepended to the prompt for personality alignment.
+// If characterSettings is non-empty, it is prepended to the prompt for personality alignment.
 // Uses TemperatureDeterministic for consistent outputs.
-func (qps *QueryPreprocessingService) GenerateClarification(
+func GenerateClarification(
 	llmConfig *model.LLMConfig,
 	query string,
-	history []map[string]string,
+	history []llm.Message,
 	reason string,
-	characterSettings *string,
-	maxMessages *int,
+	characterSettings string,
+	maxMessages int,
 ) string {
 	chatModel := llm.NewChatModelWithTemperature(llmConfig.BaseURL, llmConfig.APIKey, llmConfig.ModelID, llm.TemperatureDeterministic)
 
-	historyText := qps.FormatHistoryForPreprocessing(history, maxMessages)
+	historyText := FormatHistoryForPreprocessing(history, maxMessages)
 	prompt := fmt.Sprintf(clarifyPrompt, historyText, query, reason)
 
-	// Prepend character settings for personality alignment
-	if characterSettings != nil && *characterSettings != "" {
-		prompt = fmt.Sprintf("[Your Character]\n%s\n\n%s", *characterSettings, prompt)
+	if characterSettings != "" {
+		prompt = fmt.Sprintf("[Your Character]\n%s\n\n%s", characterSettings, prompt)
 	}
 
-	result, err := chatModel.Chat(stdctx.Background(), []llm.ChatMessage{
+	result, err := chatModel.Chat(stdctx.Background(), []llm.Message{
 		{Role: "user", Content: prompt},
 	})
 	if err != nil {
@@ -202,7 +184,7 @@ func (qps *QueryPreprocessingService) GenerateClarification(
 		return "Your question is a bit vague. Could you please provide more details about your needs?"
 	}
 
-	applogger.L.Info("Generated clarification for query", "query", query[:minLen(50, len(query))])
+	applogger.L.Info("Generated clarification for query", "query", query[:min(50, len(query))])
 	return result
 }
 
@@ -212,12 +194,12 @@ func (qps *QueryPreprocessingService) GenerateClarification(
 //   - clear: use original query with retrieval
 //   - ambiguous: rewrite query with context for retrieval
 //   - vague: generate clarification question, mark as needs_clarification
-func (qps *QueryPreprocessingService) PreprocessQuery(
+func PreprocessQuery(
 	llmConfig *model.LLMConfig,
 	query string,
-	history []map[string]string,
-	characterSettings *string,
-	maxMessages *int,
+	history []llm.Message,
+	characterSettings string,
+	maxMessages int,
 ) *PreprocessingResult {
 	result := &PreprocessingResult{
 		OriginalQuery:  query,
@@ -225,7 +207,7 @@ func (qps *QueryPreprocessingService) PreprocessQuery(
 		QueryType:      queryTypeClear,
 	}
 
-	routing := qps.RouteQuery(llmConfig, query, history, maxMessages)
+	routing := RouteQuery(llmConfig, query, history, maxMessages)
 	queryType := routing.Type
 	result.QueryType = queryType
 
@@ -239,32 +221,25 @@ func (qps *QueryPreprocessingService) PreprocessQuery(
 		result.SkipRetrieval = false
 
 	case queryTypeAmbiguous:
-		if routing.RewrittenQuery != nil {
-			result.ProcessedQuery = *routing.RewrittenQuery
+		if routing.RewrittenQuery != "" {
+			result.ProcessedQuery = routing.RewrittenQuery
 		} else {
 			result.ProcessedQuery = query
 		}
 
 	case queryTypeVague:
 		reason := "Query is too vague"
-		if routing.Reason != nil {
-			reason = *routing.Reason
+		if routing.Reason != "" {
+			reason = routing.Reason
 		}
-		clarification := qps.GenerateClarification(llmConfig, query, history, reason, characterSettings, maxMessages)
+		clarification := GenerateClarification(llmConfig, query, history, reason, characterSettings, maxMessages)
 		result.NeedsClarification = true
 		result.Clarification = clarification
 	}
 
 	applogger.L.Info("Query preprocessing complete",
 		"type", queryType,
-		"processed", result.ProcessedQuery[:minLen(50, len(result.ProcessedQuery))],
+		"processed", result.ProcessedQuery[:min(50, len(result.ProcessedQuery))],
 	)
 	return result
-}
-
-func minLen(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

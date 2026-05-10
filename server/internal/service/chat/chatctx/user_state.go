@@ -48,30 +48,33 @@ type UserState struct {
 	NeedsWorldInteraction bool   `json:"needs_world_interaction"`
 }
 
+// emotionDescriptions maps emotion codes to natural language descriptions.
+var emotionDescriptions = map[string]string{
+	"calm":       "calm and relaxed",
+	"anxious":    "anxious or worried",
+	"frustrated": "frustrated or impatient",
+	"urgent":     "under time pressure or in urgency",
+	"curious":    "curious and exploratory",
+}
+
+// purposeDescriptions maps purpose codes to natural language descriptions.
+var purposeDescriptions = map[string]string{
+	"seek_help":         "seeking help with a problem",
+	"seek_advice":       "looking for advice or recommendations",
+	"seek_confirmation": "seeking confirmation or validation",
+	"express_feeling":   "expressing feelings without expecting solutions",
+	"casual_chat":       "engaging in casual conversation",
+}
+
 // ToNaturalLanguage converts the structured user state into a natural language description
 // suitable for injection into the prompt's instruction area.
 func (us *UserState) ToNaturalLanguage() string {
-	emotionMap := map[string]string{
-		"calm":       "calm and relaxed",
-		"anxious":    "anxious or worried",
-		"frustrated": "frustrated or impatient",
-		"urgent":     "under time pressure or in urgency",
-		"curious":    "curious and exploratory",
-	}
-	purposeMap := map[string]string{
-		"seek_help":         "seeking help with a problem",
-		"seek_advice":       "looking for advice or recommendations",
-		"seek_confirmation": "seeking confirmation or validation",
-		"express_feeling":   "expressing feelings without expecting solutions",
-		"casual_chat":       "engaging in casual conversation",
-	}
-
 	emotionDesc := us.Emotion
-	if desc, ok := emotionMap[us.Emotion]; ok {
+	if desc, ok := emotionDescriptions[us.Emotion]; ok {
 		emotionDesc = desc
 	}
 	purposeDesc := us.Purpose
-	if desc, ok := purposeMap[us.Purpose]; ok {
+	if desc, ok := purposeDescriptions[us.Purpose]; ok {
 		purposeDesc = desc
 	}
 
@@ -89,27 +92,15 @@ func (us *UserState) ToNaturalLanguage() string {
 	return strings.Join(parts, ", ") + "."
 }
 
-// UserStateService infers user state from recent conversation messages.
-// Uses LLM structured output (JSON Schema response format) to produce a UserState.
-// On failure, returns nil, allowing graceful degradation — the main chat flow
-// continues without user state.
-type UserStateService struct{}
-
-// NewUserStateService creates a UserStateService instance.
-func NewUserStateService() *UserStateService {
-	return &UserStateService{}
-}
-
 // formatRecentMessages formats recent messages into text for the inference prompt.
-func (uss *UserStateService) formatRecentMessages(recentMessages []map[string]interface{}) string {
+func formatRecentMessages(recentMessages []model.Message) string {
 	var lines []string
 	for _, msg := range recentMessages {
 		role := "User"
-		if r, ok := msg["role"].(string); ok && r != "user" {
+		if msg.Role != "user" {
 			role = "Assistant"
 		}
-		content, _ := msg["content"].(string)
-		lines = append(lines, fmt.Sprintf("%s: %s", role, content))
+		lines = append(lines, fmt.Sprintf("%s: %s", role, msg.Content))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -117,9 +108,9 @@ func (uss *UserStateService) formatRecentMessages(recentMessages []map[string]in
 // InferUserState infers the user's current state from recent conversation messages.
 // Uses TemperatureDeterministic for consistent, deterministic outputs.
 // Returns nil if inference fails, allowing the chat flow to continue without user state.
-func (uss *UserStateService) InferUserState(
+func InferUserState(
 	llmConfig *model.LLMConfig,
-	recentMessages []map[string]interface{},
+	recentMessages []model.Message,
 ) *UserState {
 	if len(recentMessages) == 0 {
 		return nil
@@ -127,10 +118,10 @@ func (uss *UserStateService) InferUserState(
 
 	chatModel := llm.NewChatModelWithTemperature(llmConfig.BaseURL, llmConfig.APIKey, llmConfig.ModelID, llm.TemperatureDeterministic)
 
-	dialogText := uss.formatRecentMessages(recentMessages)
+	dialogText := formatRecentMessages(recentMessages)
 	prompt := fmt.Sprintf(userStateInferencePrompt, dialogText)
 
-	result, err := chatModel.ChatWithJSONSchema(stdctx.Background(), []llm.ChatMessage{
+	result, err := chatModel.ChatWithJSONSchema(stdctx.Background(), []llm.Message{
 		{Role: "user", Content: prompt},
 	}, llm.JSONSchemaDefinition{
 		Name:        "UserState",

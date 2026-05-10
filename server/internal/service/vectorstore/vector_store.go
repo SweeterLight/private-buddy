@@ -134,7 +134,7 @@ func (vss *VectorStoreService) AddMessages(sessionID int64, messageIDs []int64, 
 	// Insert each embedding with its metadata into the database
 	tableName := fmt.Sprintf("session_vec_%d", sessionID)
 	for i, embedding := range embeddings {
-		blob := float32SliceToBlob(embedding)
+		blob := Float32SliceToBlob(embedding)
 		meta := metadatas[i]
 		_, err := vss.db.Exec(
 			fmt.Sprintf("INSERT INTO %s (message_id, role, content, embedding) VALUES (?, ?, ?, ?)", tableName),
@@ -217,7 +217,7 @@ func (vss *VectorStoreService) Search(sessionID int64, query string, k int) ([]S
 			continue
 		}
 
-		storedEmbedding := blobToFloat32Slice(blob)
+		storedEmbedding := BlobToFloat32Slice(blob)
 		score := cosineSimilarity(queryEmbedding, storedEmbedding)
 		candidates = append(candidates, candidate{
 			MessageID: msgID,
@@ -292,22 +292,17 @@ func cosineSimilarity(a, b []float32) float64 {
 	return dotProduct / (math.Sqrt(normA) * math.Sqrt(normB))
 }
 
-// float32SliceToBlob converts a float32 slice to a binary blob for SQLite storage.
+// Float32SliceToBlob converts a float32 slice to a binary blob for SQLite storage.
 // Each float32 is encoded as 4 bytes using IEEE 754 binary representation
 // in little-endian byte order.
 //
 // This encoding is efficient (no serialization overhead) and portable
 // (IEEE 754 is a universal standard for floating-point numbers).
-func float32SliceToBlob(slice []float32) []byte {
-	// Each float32 occupies 4 bytes
+func Float32SliceToBlob(slice []float32) []byte {
 	buf := make([]byte, len(slice)*4)
 
 	for i, v := range slice {
-		// Get the IEEE 754 binary representation of the float32
 		bits := math.Float32bits(v)
-
-		// Store in little-endian order (least significant byte first)
-		// This matches the native byte order on x86 and ARM processors
 		buf[i*4] = byte(bits)
 		buf[i*4+1] = byte(bits >> 8)
 		buf[i*4+2] = byte(bits >> 16)
@@ -317,11 +312,10 @@ func float32SliceToBlob(slice []float32) []byte {
 	return buf
 }
 
-// blobToFloat32Slice converts a binary blob back to a float32 slice.
-// This is the inverse operation of float32SliceToBlob.
+// BlobToFloat32Slice converts a binary blob back to a float32 slice.
+// This is the inverse operation of Float32SliceToBlob.
 // Returns nil if the blob length is not a multiple of 4.
-func blobToFloat32Slice(blob []byte) []float32 {
-	// Validate that blob length is valid (must be multiple of 4)
+func BlobToFloat32Slice(blob []byte) []float32 {
 	if len(blob)%4 != 0 {
 		return nil
 	}
@@ -329,14 +323,10 @@ func blobToFloat32Slice(blob []byte) []float32 {
 	slice := make([]float32, len(blob)/4)
 
 	for i := range slice {
-		// Reconstruct the uint32 from little-endian bytes
 		bits := uint32(blob[i*4]) |
 			uint32(blob[i*4+1])<<8 |
 			uint32(blob[i*4+2])<<16 |
 			uint32(blob[i*4+3])<<24
-
-		// Convert the bit pattern back to float32
-		// This reinterprets the bits without any numerical conversion
 		slice[i] = math.Float32frombits(bits)
 	}
 

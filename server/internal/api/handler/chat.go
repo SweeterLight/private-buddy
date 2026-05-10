@@ -25,7 +25,9 @@ import (
 	"time"
 
 	"private-buddy-server/internal/config"
+	"private-buddy-server/internal/database"
 	"private-buddy-server/internal/model"
+	"private-buddy-server/internal/service"
 	"private-buddy-server/internal/service/chat"
 	chatcontext "private-buddy-server/internal/service/chat/chatctx"
 
@@ -110,7 +112,7 @@ func (h *Handler) CreateAndSend(c *gin.Context) {
 	}
 	if agentID == 0 {
 		var defaultAgent model.Agent
-		if err := h.db.First(&defaultAgent).Error; err != nil {
+		if err := database.DB.First(&defaultAgent).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"detail": "No default agent found"})
 			return
 		}
@@ -132,7 +134,7 @@ func (h *Handler) CreateAndSend(c *gin.Context) {
 		AgentID: agentID,
 		Status:  model.SessionStatusStreaming,
 	}
-	if err := h.db.Create(&session).Error; err != nil {
+	if err := database.DB.Create(&session).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
 		return
 	}
@@ -144,7 +146,7 @@ func (h *Handler) CreateAndSend(c *gin.Context) {
 		Status:          model.MessageStatusCompleted,
 		HasInteractions: model.HasInteractionsNone,
 	}
-	if err := h.db.Select("SessionID", "Role", "Content", "Status", "HasInteractions").Create(&userMsg).Error; err != nil {
+	if err := database.DB.Select("SessionID", "Role", "Content", "Status", "HasInteractions").Create(&userMsg).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
 		return
 	}
@@ -158,7 +160,7 @@ func (h *Handler) CreateAndSend(c *gin.Context) {
 		Status:          model.MessageStatusStreaming,
 		HasInteractions: model.HasInteractionsPending,
 	}
-	if err := h.db.Select("SessionID", "Role", "Content", "Status", "HasInteractions").Create(&aiMsg).Error; err != nil {
+	if err := database.DB.Select("SessionID", "Role", "Content", "Status", "HasInteractions").Create(&aiMsg).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
 		return
 	}
@@ -184,10 +186,10 @@ func (h *Handler) CreateAndSend(c *gin.Context) {
 //
 // Returns trigger_message_id and ai_message_id.
 func (h *Handler) SendMessage(c *gin.Context) {
-	sessionID := getPathIDFromParam(c, "session_id")
+	sessionID := getPathIDByParam(c, "session_id")
 
 	var session model.Session
-	if err := h.db.First(&session, sessionID).Error; err != nil {
+	if err := database.DB.First(&session, sessionID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "Session not found"})
 		return
 	}
@@ -210,7 +212,7 @@ func (h *Handler) SendMessage(c *gin.Context) {
 		Status:          model.MessageStatusCompleted,
 		HasInteractions: model.HasInteractionsNone,
 	}
-	if err := h.db.Select("SessionID", "Role", "Content", "Status", "HasInteractions").Create(&userMsg).Error; err != nil {
+	if err := database.DB.Select("SessionID", "Role", "Content", "Status", "HasInteractions").Create(&userMsg).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
 		return
 	}
@@ -224,12 +226,12 @@ func (h *Handler) SendMessage(c *gin.Context) {
 		Status:          model.MessageStatusStreaming,
 		HasInteractions: model.HasInteractionsPending,
 	}
-	if err := h.db.Select("SessionID", "Role", "Content", "Status", "HasInteractions").Create(&aiMsg).Error; err != nil {
+	if err := database.DB.Select("SessionID", "Role", "Content", "Status", "HasInteractions").Create(&aiMsg).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
 		return
 	}
 
-	h.db.Model(&session).Update("status", model.SessionStatusStreaming)
+	database.DB.Model(&session).Update("status", model.SessionStatusStreaming)
 
 	go h.processChatTask(userMsg.ID, aiMsg.ID, sessionID)
 
@@ -248,7 +250,7 @@ func (h *Handler) SendMessage(c *gin.Context) {
 //  4. Sends heartbeat keep-alive every 30 seconds
 //  5. Cleans up on client disconnect or stream completion
 func (h *Handler) StreamMessages(c *gin.Context) {
-	sessionID := getPathIDFromParam(c, "session_id")
+	sessionID := getPathIDByParam(c, "session_id")
 
 	c.Header("Content-Type", "text/event-stream; charset=utf-8")
 	c.Header("Cache-Control", "no-cache")
@@ -256,14 +258,14 @@ func (h *Handler) StreamMessages(c *gin.Context) {
 	c.Header("X-Accel-Buffering", "no")
 
 	var session model.Session
-	if err := h.db.First(&session, sessionID).Error; err != nil {
+	if err := database.DB.First(&session, sessionID).Error; err != nil {
 		errorData, _ := json.Marshal(map[string]string{"type": "error", "message": "Session not found"})
 		c.SSEvent("", string(errorData))
 		return
 	}
 
 	var streamingMsg model.Message
-	if err := h.db.Where("session_id = ? AND status = ?", sessionID, model.MessageStatusStreaming).
+	if err := database.DB.Where("session_id = ? AND status = ?", sessionID, model.MessageStatusStreaming).
 		Order("created_at DESC").First(&streamingMsg).Error; err == nil {
 		existingData, _ := json.Marshal(map[string]interface{}{
 			"type":       "existing",
@@ -329,12 +331,12 @@ func (h *Handler) processChatTask(triggerMessageID, aiMessageID, sessionID int64
 			doneData, _ := json.Marshal(map[string]string{"type": "done"})
 			connManager.Broadcast(sessionID, string(doneData))
 		}
-		h.db.Model(&model.Session{}).Where("id = ?", sessionID).Update("status", model.SessionStatusIdle)
+		database.DB.Model(&model.Session{}).Where("id = ?", sessionID).Update("status", model.SessionStatusIdle)
 		applogger.L.Info("processChatTask completed", "session_id", sessionID)
 	}()
 
 	var triggerMsg model.Message
-	if err := h.db.First(&triggerMsg, triggerMessageID).Error; err != nil {
+	if err := database.DB.First(&triggerMsg, triggerMessageID).Error; err != nil {
 		h.finalizeAIMessage(aiMessageID, userFriendlyErrorMessage)
 		doneData, _ := json.Marshal(map[string]string{"type": "done"})
 		connManager.Broadcast(sessionID, string(doneData))
@@ -353,7 +355,7 @@ func (h *Handler) processChatTask(triggerMessageID, aiMessageID, sessionID int64
 		return
 	}
 
-	session := h.dataService.GetSession(h.db, sessionID)
+	session := service.GetSession(sessionID)
 	if session == nil {
 		h.finalizeAIMessage(aiMessageID, userFriendlyErrorMessage)
 		doneData, _ := json.Marshal(map[string]string{"type": "done"})
@@ -361,7 +363,7 @@ func (h *Handler) processChatTask(triggerMessageID, aiMessageID, sessionID int64
 		return
 	}
 
-	agent := h.dataService.GetAgent(h.db, session.AgentID)
+	agent := service.GetAgent(session.AgentID)
 	if agent == nil {
 		h.finalizeAIMessage(aiMessageID, userFriendlyErrorMessage)
 		doneData, _ := json.Marshal(map[string]string{"type": "done"})
@@ -369,7 +371,7 @@ func (h *Handler) processChatTask(triggerMessageID, aiMessageID, sessionID int64
 		return
 	}
 
-	llmConfig := h.dataService.GetLLMConfig(h.db, agent.LLMConfigID)
+	llmConfig := service.GetLLMConfig(agent.LLMConfigID)
 	if llmConfig == nil {
 		h.finalizeAIMessage(aiMessageID, userFriendlyErrorMessage)
 		doneData, _ := json.Marshal(map[string]string{"type": "done"})
@@ -377,16 +379,17 @@ func (h *Handler) processChatTask(triggerMessageID, aiMessageID, sessionID int64
 		return
 	}
 
-	chatService := chat.NewChatService(h.db, session, agent, llmConfig)
-	chatService.SetOnChunk(func(chunk string) {
-		data, _ := json.Marshal(map[string]string{"type": "chunk", "content": chunk})
-		connManager.Broadcast(sessionID, string(data))
-	})
-	chatService.SetOnNotify(func(data string) {
-		connManager.Broadcast(sessionID, data)
-	})
+	callbacks := &chat.ChatCallbacks{
+		OnChunk: func(chunk string) {
+			data, _ := json.Marshal(map[string]string{"type": "chunk", "content": chunk})
+			connManager.Broadcast(sessionID, string(data))
+		},
+		OnNotify: func(data string) {
+			connManager.Broadcast(sessionID, data)
+		},
+	}
 
-	result, err := chatService.Process(triggerMessageID, aiMessageID)
+	result, err := chat.Process(session, agent, llmConfig, triggerMessageID, aiMessageID, callbacks)
 	if err != nil {
 		applogger.L.Error("Chat processing failed", "error", err)
 		h.finalizeAIMessage(aiMessageID, userFriendlyErrorMessage)
@@ -403,7 +406,7 @@ func (h *Handler) processChatTask(triggerMessageID, aiMessageID, sessionID int64
 
 // finalizeAIMessage updates the AI message with final content and marks it as completed.
 func (h *Handler) finalizeAIMessage(aiMessageID int64, content string) {
-	h.db.Model(&model.Message{}).Where("id = ?", aiMessageID).Updates(map[string]interface{}{
+	database.DB.Model(&model.Message{}).Where("id = ?", aiMessageID).Updates(map[string]interface{}{
 		"content": content,
 		"status":  model.MessageStatusCompleted,
 	})
@@ -416,7 +419,7 @@ func (h *Handler) triggerSummaryIfNeeded(sessionID int64) {
 	settings := config.Get()
 
 	var messageCount int64
-	h.db.Model(&model.Message{}).Where("session_id = ?", sessionID).Count(&messageCount)
+	database.DB.Model(&model.Message{}).Where("session_id = ?", sessionID).Count(&messageCount)
 
 	if messageCount >= int64(settings.SummaryWindowSize) {
 		applogger.L.Info("Triggering summary generation", "session_id", sessionID, "V", messageCount)
@@ -426,13 +429,5 @@ func (h *Handler) triggerSummaryIfNeeded(sessionID int64) {
 
 // generateSummary runs summary generation in a background goroutine.
 func (h *Handler) generateSummary(sessionID int64, version int, windowSize int) {
-	chatcontext.GenerateSummaryForSession(h.db, h.dataService, sessionID, version, windowSize)
-}
-
-// getPathIDFromParam extracts an int64 path parameter from the URL.
-// Returns 0 if the parameter is not a valid integer.
-func getPathIDFromParam(c *gin.Context, param string) int64 {
-	idStr := c.Param(param)
-	id, _ := strconv.ParseInt(idStr, 10, 64)
-	return id
+	chatcontext.GenerateSummaryForSession(sessionID, version, windowSize)
 }

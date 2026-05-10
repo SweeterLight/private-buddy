@@ -10,7 +10,13 @@ import (
 )
 
 func getPathID(c *gin.Context) int64 {
-	idStr := c.Param("id")
+	return getPathIDByParam(c, "id")
+}
+
+// getPathIDByParam extracts an int64 ID from the URL path by parameter name.
+// Returns 0 if the parameter is not a valid integer.
+func getPathIDByParam(c *gin.Context, param string) int64 {
+	idStr := c.Param(param)
 	id, _ := strconv.ParseInt(idStr, 10, 64)
 	return id
 }

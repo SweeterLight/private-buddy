@@ -91,6 +91,12 @@ func (s *Settings) GetAvatarsDir() string {
 	return filepath.Join(s.DataRoot, "avatars")
 }
 
+// GetKBDir returns the root directory path for knowledge base data.
+// Each knowledge base has a subdirectory: {kb_dir}/{kb_id}/.
+func (s *Settings) GetKBDir() string {
+	return filepath.Join(s.DataRoot, "kb")
+}
+
 // getEnv returns the environment variable value or the fallback if not set.
 func getEnv(key, fallback string) string {
 	if val := os.Getenv(key); val != "" {

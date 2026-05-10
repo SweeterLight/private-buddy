@@ -1,8 +1,8 @@
 import React from 'react';
-import { UserOutlined, RobotOutlined, ApiOutlined, SearchOutlined, GlobalOutlined } from '@ant-design/icons';
+import { UserOutlined, RobotOutlined, ApiOutlined, SearchOutlined, GlobalOutlined, DatabaseOutlined } from '@ant-design/icons';
 import { getAvatarUrl } from '../services/api';
 
-export type IconType = 'agent' | 'llm' | 'embedding' | 'search' | 'language';
+export type IconType = 'agent' | 'llm' | 'embedding' | 'search' | 'language' | 'kb';
 
 interface ConfigIconProps {
   type: IconType;
@@ -18,6 +18,7 @@ const ICON_MAP: Record<IconType, { icon: React.ReactNode; colorVar: string; bgVa
   embedding: { icon: <ApiOutlined />, colorVar: 'var(--color-embedding)', bgVar: 'var(--color-embedding-bg)' },
   search: { icon: <SearchOutlined />, colorVar: 'var(--color-search)', bgVar: 'var(--color-search-bg)' },
   language: { icon: <GlobalOutlined />, colorVar: 'var(--color-language)', bgVar: 'var(--color-language-bg)' },
+  kb: { icon: <DatabaseOutlined />, colorVar: 'var(--color-kb)', bgVar: 'var(--color-kb-bg)' },
 };
 
 const ConfigIcon: React.FC<ConfigIconProps> = ({

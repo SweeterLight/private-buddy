@@ -22,27 +22,22 @@ import (
 	"strings"
 
 	"private-buddy-server/internal/config"
+	"private-buddy-server/internal/service/llm"
 )
 
 // ContextManager manages the internal message history for a single task execution.
-//
-// Messages follow the OpenAI chat completion format:
-//   - system: { role, content }
-//   - user: { role, content }
-//   - assistant: { role, content } or { role, tool_calls }
-//   - tool: { role, tool_call_id, content }
 //
 // Window applies to the dynamic part only. The fixed part
 // (system prompt with context info, Task, Notes) is always
 // fully included because these are essential prerequisites for
 // the agent's work.
 type ContextManager struct {
-	systemPrompt    string                     // Static system prompt (basic rules)
-	iterationWindow int                        // Number of recent iterations to keep visible
-	taskContent     string                     // Full content of task requirements
-	notesContent    string                     // Full content of agent's notes
-	totalIterations int                        // Total iterations accumulated
-	dynamicMessages [][]map[string]interface{} // Groups of (assistant_msg + tool_results) per iteration
+	systemPrompt    string          // Static system prompt (basic rules)
+	iterationWindow int             // Number of recent iterations to keep visible
+	taskContent     string          // Full content of task requirements
+	notesContent    string          // Full content of agent's notes
+	totalIterations int             // Total iterations accumulated
+	dynamicMessages [][]llm.Message // Groups of (assistant_msg + tool_results) per iteration
 }
 
 // NewContextManager creates a new ContextManager.
@@ -72,8 +67,8 @@ func (cm *ContextManager) RefreshNotes(newNotesContent string) {
 // An iteration is a group of messages that must be kept together
 // to maintain conversation coherence. The assistant message and
 // its associated tool results are always included or excluded as a unit.
-func (cm *ContextManager) AddIteration(assistantMsg map[string]interface{}, toolResults []map[string]interface{}) {
-	group := []map[string]interface{}{assistantMsg}
+func (cm *ContextManager) AddIteration(assistantMsg llm.Message, toolResults []llm.Message) {
+	group := []llm.Message{assistantMsg}
 	group = append(group, toolResults...)
 	cm.dynamicMessages = append(cm.dynamicMessages, group)
 	cm.totalIterations++
@@ -88,9 +83,9 @@ func (cm *ContextManager) AddIteration(assistantMsg map[string]interface{}, tool
 //  4. dynamic messages (recent iterations within window)
 //
 // Window applies to dynamic part only; fixed part is always fully included.
-func (cm *ContextManager) BuildMessages() []map[string]interface{} {
+func (cm *ContextManager) BuildMessages() []llm.Message {
 	window := cm.iterationWindow
-	var visible [][]map[string]interface{}
+	var visible [][]llm.Message
 	if len(cm.dynamicMessages) > window {
 		visible = cm.dynamicMessages[len(cm.dynamicMessages)-window:]
 	} else {
@@ -101,10 +96,10 @@ func (cm *ContextManager) BuildMessages() []map[string]interface{} {
 
 	fullSystemPrompt := cm.buildFullSystemPrompt(visibleIterations, invisibleIterations, len(cm.notesContent))
 
-	messages := []map[string]interface{}{
-		{"role": "system", "content": fullSystemPrompt},
-		{"role": "user", "content": fmt.Sprintf("[Task]\n%s", cm.taskContent)},
-		{"role": "user", "content": fmt.Sprintf("[Your Notes]\n%s", cm.notesContent)},
+	messages := []llm.Message{
+		{Role: "system", Content: fullSystemPrompt},
+		{Role: "user", Content: fmt.Sprintf("[Task]\n%s", cm.taskContent)},
+		{Role: "user", Content: fmt.Sprintf("[Your Notes]\n%s", cm.notesContent)},
 	}
 
 	for _, group := range visible {

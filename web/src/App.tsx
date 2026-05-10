@@ -12,16 +12,19 @@ import AgentConfig from './components/AgentConfig';
 import SearchConfigForm from './components/SearchConfigForm';
 import ResizableCard from './components/ResizableCard';
 import PanelDetail from './components/PanelDetail';
+import KnowledgeBaseList from './components/KnowledgeBaseList';
+import KnowledgeBaseDetail from './components/KnowledgeBaseDetail';
 import { ConfigIcon } from './components/AgentAvatar';
 import { versionApi, initApiClient } from './services/api';
 import type { IconType } from './components/AgentAvatar';
-import type { Session, LLMConfig } from './types';
+import type { Session, LLMConfig, KnowledgeBase } from './types';
 import './App.css';
 
-type RightPanelView = null | 'settings-overview' | 'settings-agent' | 'settings-llm' | 'settings-embedding' | 'settings-search' | 'settings-language';
+type RightPanelView = null | 'settings-overview' | 'settings-agent' | 'settings-llm' | 'settings-embedding' | 'settings-search' | 'settings-language' | 'settings-kb' | 'settings-kb-detail';
 
 const SETTINGS_CARDS: { key: string; iconType: IconType }[] = [
   { key: 'settings-agent', iconType: 'agent' },
+  { key: 'settings-kb', iconType: 'kb' },
   { key: 'settings-llm', iconType: 'llm' },
   { key: 'settings-embedding', iconType: 'embedding' },
   { key: 'settings-search', iconType: 'search' },
@@ -36,6 +39,8 @@ function App() {
   const [showCreateAgent, setShowCreateAgent] = useState(false);
   const [showCreateLLM, setShowCreateLLM] = useState(false);
   const [showCreateEmbedding, setShowCreateEmbedding] = useState(false);
+  const [showCreateKB, setShowCreateKB] = useState(false);
+  const [selectedKB, setSelectedKB] = useState<KnowledgeBase | null>(null);
   const [currentLang, setCurrentLang] = useState(getCurrentLanguage());
   const [version, setVersion] = useState<string>('');
   const [isMacElectron, setIsMacElectron] = useState(false);
@@ -118,6 +123,7 @@ function App() {
 
   const settingsLabelMap: Record<string, string> = {
     'settings-agent': t('settings.agentConfig'),
+    'settings-kb': t('settings.kbConfig'),
     'settings-llm': t('settings.llmConfig'),
     'settings-embedding': t('settings.embeddingConfig'),
     'settings-search': t('settings.searchConfig'),
@@ -182,6 +188,45 @@ function App() {
             />
           </PanelDetail>
         );
+
+      case 'settings-kb':
+        return (
+          <PanelDetail
+            title={t('kb.title')}
+            onBack={goBackToSettings}
+            onAdd={() => setShowCreateKB(true)}
+          >
+            <KnowledgeBaseList
+              showCreate={showCreateKB}
+              onCreateClose={() => setShowCreateKB(false)}
+              onSelectKB={(kb) => {
+                setSelectedKB(kb);
+                setRightPanelView('settings-kb-detail');
+              }}
+            />
+          </PanelDetail>
+        );
+
+      case 'settings-kb-detail':
+        return selectedKB ? (
+          <PanelDetail
+            title={selectedKB.name}
+            onBack={() => {
+              setSelectedKB(null);
+              setShowCreateKB(false);
+              setRightPanelView('settings-kb');
+            }}
+          >
+            <KnowledgeBaseDetail
+              kb={selectedKB}
+              onBack={() => {
+                setSelectedKB(null);
+                setShowCreateKB(false);
+                setRightPanelView('settings-kb');
+              }}
+            />
+          </PanelDetail>
+        ) : null;
 
       case 'settings-llm':
         return (

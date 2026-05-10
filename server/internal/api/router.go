@@ -12,17 +12,17 @@ import (
 	"private-buddy-server/internal/config"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 )
 
 // SetupRouter creates and configures the Gin engine with all routes.
 // Includes CORS middleware, static file serving for avatars, and all API endpoints.
-func SetupRouter(db *gorm.DB) *gin.Engine {
+func SetupRouter() *gin.Engine {
 	r := gin.Default()
 
 	r.Use(middleware.CORS())
 
-	h := handler.NewHandler(db)
+	h := handler.NewHandler()
+	kbHandler := handler.NewKBHandler()
 
 	r.GET("/", h.Root)
 	r.GET("/api/version", h.GetVersion)
@@ -108,6 +108,21 @@ func SetupRouter(db *gorm.DB) *gin.Engine {
 		uploads := api.Group("/uploads")
 		{
 			uploads.POST("/avatar", h.UploadAvatar)
+		}
+
+		kbGroup := api.Group("/kb")
+		{
+			kbGroup.POST("", kbHandler.CreateKnowledgeBase)
+			kbGroup.GET("", kbHandler.ListKnowledgeBases)
+			kbGroup.GET("/:id", kbHandler.GetKnowledgeBase)
+			kbGroup.PUT("/:id", kbHandler.UpdateKnowledgeBase)
+			kbGroup.DELETE("/:id", kbHandler.DeleteKnowledgeBase)
+			kbGroup.GET("/:id/documents", kbHandler.ListDocuments)
+			kbGroup.POST("/:id/documents", kbHandler.UploadDocument)
+			kbGroup.GET("/:id/documents/:doc_id", kbHandler.GetDocument)
+			kbGroup.DELETE("/:id/documents/:doc_id", kbHandler.DeleteDocument)
+			kbGroup.POST("/:id/search", kbHandler.SearchKB)
+			kbGroup.POST("/search", kbHandler.SearchMultiKB)
 		}
 	}
 

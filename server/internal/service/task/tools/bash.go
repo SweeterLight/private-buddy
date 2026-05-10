@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sashabaranov/go-openai"
+	"private-buddy-server/internal/service/llm"
 
 	applogger "private-buddy-server/internal/logger"
 )
@@ -35,12 +35,12 @@ func NewBashTool(workspace string) *BashTool {
 
 func (b *BashTool) Name() string { return "bash" }
 
-func (b *BashTool) Schema() openai.FunctionDefinition {
+func (b *BashTool) Schema() llm.FunctionDefinition {
 	workspaceHint := ""
 	if b.workspace != "" {
 		workspaceHint = fmt.Sprintf(" All file operations must be within %s. Do not access paths outside this directory.", b.workspace)
 	}
-	return openai.FunctionDefinition{
+	return llm.FunctionDefinition{
 		Name:        "bash",
 		Description: "Execute a shell command. Use this tool to run commands, manage files, and interact with the system." + workspaceHint,
 		Parameters: map[string]interface{}{

@@ -9,12 +9,11 @@ import (
 	stdctx "context"
 	"fmt"
 
+	"private-buddy-server/internal/database"
 	"private-buddy-server/internal/model"
 	"private-buddy-server/internal/service/llm"
 
 	applogger "private-buddy-server/internal/logger"
-
-	"gorm.io/gorm"
 )
 
 // summaryPrompt is the LLM prompt template for conversation summarization.
@@ -35,7 +34,7 @@ IMPORTANT: The summary MUST preserve the original language of the conversation.
 - If the conversation contains multiple languages, the summary may also contain multiple languages.
 - Do NOT translate between languages. Maintain information fidelity.`
 
-// SummaryService manages conversation summary generation and retrieval.
+// GenerateSummary generates a summary for the specified version.
 //
 // Summary Generation Rules:
 //   - V < N: No summary generated (not enough messages)
@@ -47,52 +46,19 @@ IMPORTANT: The summary MUST preserve the original language of the conversation.
 // operation, ensuring no intermediate state exists where summary exists but
 // narrative is empty. This eliminates the real-time narrative generation
 // bottleneck during chat processing while maintaining data consistency.
-type SummaryService struct {
-	db        *gorm.DB
-	session   *model.Session
-	agent     *model.Agent
-	llmConfig *model.LLMConfig
-}
-
-// NewSummaryService creates a SummaryService bound to a specific session.
-func NewSummaryService(db *gorm.DB, session *model.Session, agent *model.Agent, llmConfig *model.LLMConfig) *SummaryService {
-	return &SummaryService{
-		db:        db,
-		session:   session,
-		agent:     agent,
-		llmConfig: llmConfig,
-	}
-}
-
-// Generate generates a summary for the specified version, matching Python's generate_summary logic.
-//
-// This method implements the summary generation logic:
-//  1. Check if summary already exists (idempotent)
-//  2. Validate version >= window_size
-//  3. Determine generation strategy based on version:
-//     - N <= V < 2N: Full summary with all messages
-//     - V >= 2N: Incremental with baseline + recent messages
-//  4. Recursively generate missing baseline if needed
-//  5. Call LLM to generate summary content
-//  6. Generate cached narrative from summary content
-//  7. Atomically persist summary + narrative in a single write
 //
 // Atomic write design: summary and narrative are both generated before
 // writing to the database. This eliminates the intermediate state where
 // summary exists but narrative is empty, avoiding race conditions during
 // concurrent reads. If narrative generation fails, the entire operation
 // is aborted and no record is written — the next trigger will retry.
-func (ss *SummaryService) Generate(version int, windowSize int) error {
-	sessionID := ss.session.ID
-
-	// Check if summary already exists (idempotent)
-	existing := ss.getSummary(sessionID, version)
+func GenerateSummary(sessionID int64, llmConfig *model.LLMConfig, version int, windowSize int) error {
+	existing := getSummary(sessionID, version)
 	if existing != nil {
 		applogger.L.Info("Summary already exists", "session_id", sessionID, "version", version)
 		return nil
 	}
 
-	// Validate minimum version
 	if version < windowSize {
 		applogger.L.Info("Version < window_size, skipping summary generation",
 			"session_id", sessionID, "version", version, "window_size", windowSize)
@@ -101,30 +67,27 @@ func (ss *SummaryService) Generate(version int, windowSize int) error {
 
 	var prompt string
 
-	// Branch 1: N <= V < 2N - Full summary with all messages
 	if version < 2*windowSize {
-		messages := ss.getMessagesByRange(sessionID, 1, version)
+		messages := getMessagesByRange(sessionID, 1, version)
 		if len(messages) == 0 {
 			applogger.L.Warn("No messages found for session", "session_id", sessionID, "range", fmt.Sprintf("1-%d", version))
 			return nil
 		}
 
-		messagesText := ss.formatMessagesForSummary(messages)
+		messagesText := formatMessagesForSummary(messages)
 		prompt = fmt.Sprintf(summaryPrompt, "(No baseline summary, this is the first summary)", messagesText)
 	} else {
-		// Branch 2: V >= 2N - Incremental summary with baseline
 		baselineVersion := version - windowSize
 
-		// Get or recursively generate baseline summary
-		baselineSummary := ss.getSummary(sessionID, baselineVersion)
+		baselineSummary := getSummary(sessionID, baselineVersion)
 		if baselineSummary == nil {
 			applogger.L.Info("Baseline summary not found, generating recursively",
 				"session_id", sessionID, "baseline_version", baselineVersion)
-			if err := ss.Generate(baselineVersion, windowSize); err != nil {
+			if err := GenerateSummary(sessionID, llmConfig, baselineVersion, windowSize); err != nil {
 				applogger.L.Error("Failed to generate baseline summary recursively",
 					"session_id", sessionID, "baseline_version", baselineVersion, "error", err)
 			}
-			baselineSummary = ss.getSummary(sessionID, baselineVersion)
+			baselineSummary = getSummary(sessionID, baselineVersion)
 		}
 
 		baselineText := "(No baseline summary)"
@@ -132,21 +95,19 @@ func (ss *SummaryService) Generate(version int, windowSize int) error {
 			baselineText = baselineSummary.Content
 		}
 
-		// Get recent messages for the window
 		startSeq := version - windowSize + 1
-		messages := ss.getMessagesByRange(sessionID, startSeq, version)
+		messages := getMessagesByRange(sessionID, startSeq, version)
 		if len(messages) == 0 {
 			applogger.L.Warn("No messages found for session", "session_id", sessionID, "range", fmt.Sprintf("%d-%d", startSeq, version))
 			return nil
 		}
 
-		messagesText := ss.formatMessagesForSummary(messages)
+		messagesText := formatMessagesForSummary(messages)
 		prompt = fmt.Sprintf(summaryPrompt, baselineText, messagesText)
 	}
 
-	// Generate summary content using LLM
-	chatModel := ss.createChatModel()
-	summaryContent, err := chatModel.Chat(stdctx.Background(), []llm.ChatMessage{
+	chatModel := llm.NewChatModelWithTemperature(llmConfig.BaseURL, llmConfig.APIKey, llmConfig.ModelID, llm.TemperatureCreative)
+	summaryContent, err := chatModel.Chat(stdctx.Background(), []llm.Message{
 		{Role: "user", Content: prompt},
 	})
 	if err != nil {
@@ -156,22 +117,19 @@ func (ss *SummaryService) Generate(version int, windowSize int) error {
 
 	applogger.L.Info("Generated summary content", "session_id", sessionID, "version", version)
 
-	// Generate cached narrative from summary content (before DB write)
-	narrativeSvc := NewNarrativeService()
-	narrativeResult := narrativeSvc.GenerateNarrativeFromSummary(ss.llmConfig, summaryContent)
+	narrativeResult := GenerateNarrativeFromSummary(llmConfig, summaryContent)
 	if narrativeResult == "" {
 		applogger.L.Error("Narrative generation failed, aborting atomic write", "session_id", sessionID, "version", version)
 		return fmt.Errorf("narrative generation failed")
 	}
 
-	// Atomically persist summary + narrative in a single write
 	newSummary := model.HistoricalSummary{
 		SessionID: sessionID,
 		Version:   version,
 		Content:   summaryContent,
 		Narrative: narrativeResult,
 	}
-	if err := ss.db.Create(&newSummary).Error; err != nil {
+	if err := database.DB.Create(&newSummary).Error; err != nil {
 		return err
 	}
 
@@ -180,9 +138,9 @@ func (ss *SummaryService) Generate(version int, windowSize int) error {
 }
 
 // getSummary retrieves a specific summary by session ID and version.
-func (ss *SummaryService) getSummary(sessionID int64, version int) *model.HistoricalSummary {
+func getSummary(sessionID int64, version int) *model.HistoricalSummary {
 	var summary model.HistoricalSummary
-	err := ss.db.Where("session_id = ? AND version = ?", sessionID, version).First(&summary).Error
+	err := database.DB.Where("session_id = ? AND version = ?", sessionID, version).First(&summary).Error
 	if err != nil {
 		return nil
 	}
@@ -191,9 +149,9 @@ func (ss *SummaryService) getSummary(sessionID int64, version int) *model.Histor
 
 // getMessagesByRange returns messages by session-internal sequence numbers (1-based, inclusive).
 // Messages are ordered by their global ID, which corresponds to their insertion order.
-func (ss *SummaryService) getMessagesByRange(sessionID int64, startSeq, endSeq int) []model.Message {
+func getMessagesByRange(sessionID int64, startSeq, endSeq int) []model.Message {
 	var messages []model.Message
-	ss.db.Where("session_id = ?", sessionID).
+	database.DB.Where("session_id = ?", sessionID).
 		Order("id ASC").
 		Offset(startSeq - 1).
 		Limit(endSeq - startSeq + 1).
@@ -203,7 +161,7 @@ func (ss *SummaryService) getMessagesByRange(sessionID int64, startSeq, endSeq i
 
 // formatMessagesForSummary formats messages for the summary prompt.
 // Converts message objects into a human-readable format suitable for LLM summarization.
-func (ss *SummaryService) formatMessagesForSummary(messages []model.Message) string {
+func formatMessagesForSummary(messages []model.Message) string {
 	var formatted []string
 	for _, msg := range messages {
 		role := "User"
@@ -222,29 +180,10 @@ func (ss *SummaryService) formatMessagesForSummary(messages []model.Message) str
 	return result
 }
 
-// createChatModel creates a ChatModel for summary generation with default temperature.
-func (ss *SummaryService) createChatModel() *llm.ChatModel {
-	return llm.NewChatModelWithTemperature(ss.llmConfig.BaseURL, ss.llmConfig.APIKey, ss.llmConfig.ModelID, llm.TemperatureCreative)
-}
-
-// GetLatestSummary returns the latest summary for the session.
-// Used during context assembly to get the most recent summary available,
-// even if it's older than the current message count.
-// The narrative field is included in the returned record.
-func (ss *SummaryService) GetLatestSummary() *model.HistoricalSummary {
+// GetLatestSummaryByID returns the latest summary for a session by ID.
+func GetLatestSummaryByID(sessionID int64) *model.HistoricalSummary {
 	var summary model.HistoricalSummary
-	err := ss.db.Where("session_id = ?", ss.session.ID).Order("version DESC").First(&summary).Error
-	if err != nil {
-		return nil
-	}
-	return &summary
-}
-
-// GetLatestSummaryByID returns the latest summary for a session by ID,
-// used when SummaryService was created without a session reference.
-func (ss *SummaryService) GetLatestSummaryByID(sessionID int64) *model.HistoricalSummary {
-	var summary model.HistoricalSummary
-	err := ss.db.Where("session_id = ?", sessionID).Order("version DESC").First(&summary).Error
+	err := database.DB.Where("session_id = ?", sessionID).Order("version DESC").First(&summary).Error
 	if err != nil {
 		return nil
 	}
@@ -253,58 +192,54 @@ func (ss *SummaryService) GetLatestSummaryByID(sessionID int64) *model.Historica
 
 // GenerateSummaryForSession is a shared function for triggering summary generation
 // from both the API handler and ChatService, matching Python's generate_summary_task.
-// It loads the session, agent, and LLM config before delegating to SummaryService.Generate.
-func GenerateSummaryForSession(db *gorm.DB, dataService DataServiceInterface, sessionID int64, version int, windowSize int) {
-	session := dataService.GetSession(db, sessionID)
-	if session == nil {
-		return
-	}
-	agent := dataService.GetAgent(db, session.AgentID)
-	if agent == nil {
-		return
-	}
-	llmConfig := dataService.GetLLMConfig(db, agent.LLMConfigID)
-	if llmConfig == nil {
+// It loads the session, agent, and LLM config before delegating to GenerateSummary.
+func GenerateSummaryForSession(sessionID int64, version int, windowSize int) {
+	var session model.Session
+	if err := database.DB.First(&session, sessionID).Error; err != nil {
+		applogger.L.Error("Session not found for summary generation", "session_id", sessionID, "error", err)
 		return
 	}
 
-	summaryService := NewSummaryService(db, session, agent, llmConfig)
-	if err := summaryService.Generate(version, windowSize); err != nil {
+	var agent model.Agent
+	if err := database.DB.First(&agent, session.AgentID).Error; err != nil {
+		applogger.L.Error("Agent not found for summary generation", "agent_id", session.AgentID, "error", err)
+		return
+	}
+
+	var llmConfig model.LLMConfig
+	if err := database.DB.First(&llmConfig, agent.LLMConfigID).Error; err != nil {
+		applogger.L.Error("LLMConfig not found for summary generation", "config_id", agent.LLMConfigID, "error", err)
+		return
+	}
+
+	if err := GenerateSummary(sessionID, &llmConfig, version, windowSize); err != nil {
 		applogger.L.Error("Summary generation failed", "session_id", sessionID, "error", err)
 	}
-}
-
-// DataServiceInterface defines the data access methods needed for summary generation.
-type DataServiceInterface interface {
-	GetSession(db *gorm.DB, sessionID int64) *model.Session
-	GetAgent(db *gorm.DB, agentID int64) *model.Agent
-	GetLLMConfig(db *gorm.DB, configID int64) *model.LLMConfig
 }
 
 // GetContextMessages retrieves messages for task context assembly.
 // If a summary exists, only messages after the summary are returned;
 // otherwise, all session messages are returned.
-func GetContextMessages(db *gorm.DB, sessionID int64, maxIterations int) []llm.ChatMessage {
+func GetContextMessages(sessionID int64, maxIterations int) []llm.Message {
 	var summary model.HistoricalSummary
-	err := db.Where("session_id = ?", sessionID).Order("version DESC").First(&summary).Error
+	err := database.DB.Where("session_id = ?", sessionID).Order("version DESC").First(&summary).Error
 
 	var messages []model.Message
 	if err == nil {
-		db.Where("session_id = ? AND id > ?", sessionID, summary.ID).
+		database.DB.Where("session_id = ? AND id > ?", sessionID, summary.ID).
 			Order("created_at ASC").Find(&messages)
 	} else {
-		db.Where("session_id = ?", sessionID).
+		database.DB.Where("session_id = ?", sessionID).
 			Order("created_at ASC").Find(&messages)
 	}
 
-	// Limit to the most recent messages based on max iterations
 	if len(messages) > maxIterations*2 {
 		messages = messages[len(messages)-maxIterations*2:]
 	}
 
-	result := make([]llm.ChatMessage, 0, len(messages))
+	result := make([]llm.Message, 0, len(messages))
 	for _, m := range messages {
-		result = append(result, llm.ChatMessage{
+		result = append(result, llm.Message{
 			Role:    m.Role,
 			Content: m.Content,
 		})

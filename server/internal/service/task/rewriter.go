@@ -45,33 +45,15 @@ Output a JSON object with:
 - context_summary: Brief note on what context was used (optional)`
 
 // RewrittenRequirement represents the structured output of task requirement rewriting.
-// Mirrors Python's RewrittenRequirement pydantic model.
 type RewrittenRequirement struct {
-	Requirement    string  `json:"requirement"`     // The rewritten, self-contained task requirement
-	ContextSummary *string `json:"context_summary"` // Brief summary of relevant context used for rewriting
-}
-
-// TaskRequirementRewriter rewrites user messages into clear task requirements.
-//
-// Unlike QueryPreprocessingService (which is for RAG retrieval optimization),
-// this service focuses on making task requirements explicit and actionable
-// for the agent execution system.
-//
-// Example:
-//
-//	User message: "改一下那个文件"
-//	History: [User: "帮我创建一个 README.md", Assistant: "已创建..."]
-//	Rewritten: "修改 README.md 文件，具体修改内容需要用户确认"
-type TaskRequirementRewriter struct{}
-
-func NewTaskRequirementRewriter() *TaskRequirementRewriter {
-	return &TaskRequirementRewriter{}
+	Requirement    string `json:"requirement"`
+	ContextSummary string `json:"context_summary"`
 }
 
 // FormatHistory formats conversation history for the rewrite prompt.
 // Takes the last maxMessages messages and formats them with role prefixes.
 // Returns "(No conversation history)" if history is empty.
-func (trw *TaskRequirementRewriter) FormatHistory(history []map[string]string, maxMessages int) string {
+func FormatHistory(history []llm.Message, maxMessages int) string {
 	if len(history) == 0 {
 		return "(No conversation history)"
 	}
@@ -84,34 +66,29 @@ func (trw *TaskRequirementRewriter) FormatHistory(history []map[string]string, m
 	var formatted []string
 	for _, msg := range recent {
 		role := "User"
-		if msg["role"] != "user" {
+		if msg.Role != "user" {
 			role = "Assistant"
 		}
-		formatted = append(formatted, fmt.Sprintf("%s: %s", role, msg["content"]))
+		formatted = append(formatted, fmt.Sprintf("%s: %s", role, msg.Content))
 	}
 	return strings.Join(formatted, "\n")
 }
 
 // Rewrite rewrites a user message into a clear task requirement.
-//
-// This is the main entry point. It uses conversation history to
-// resolve references and create a self-contained task requirement.
-// Uses LLM structured output (JSON Schema response format) with TemperatureDeterministic
-// for consistent, deterministic outputs.
-//
+// Uses conversation history to resolve references and create a self-contained task requirement.
 // Returns the original userMessage on error (graceful degradation).
-func (trw *TaskRequirementRewriter) Rewrite(
+func Rewrite(
 	llmConfig *model.LLMConfig,
 	userMessage string,
-	history []map[string]string,
+	history []llm.Message,
 	maxHistoryMessages int,
 ) string {
 	chatModel := llm.NewChatModelWithTemperature(llmConfig.BaseURL, llmConfig.APIKey, llmConfig.ModelID, llm.TemperatureDeterministic)
 
-	historyText := trw.FormatHistory(history, maxHistoryMessages)
+	historyText := FormatHistory(history, maxHistoryMessages)
 	prompt := fmt.Sprintf(rewritePrompt, historyText, userMessage)
 
-	result, err := chatModel.ChatWithJSONSchema(context.Background(), []llm.ChatMessage{
+	result, err := chatModel.ChatWithJSONSchema(context.Background(), []llm.Message{
 		{Role: "user", Content: prompt},
 	}, llm.JSONSchemaDefinition{
 		Name:        "RewrittenRequirement",
@@ -142,20 +119,12 @@ func (trw *TaskRequirementRewriter) Rewrite(
 		var rewritten RewrittenRequirement
 		if err := json.Unmarshal([]byte(result), &rewritten); err == nil {
 			applogger.L.Info("Task requirement rewritten",
-				"original", userMessage[:minLen(50, len(userMessage))],
-				"rewritten", rewritten.Requirement[:minLen(50, len(rewritten.Requirement))],
+				"original", userMessage[:min(50, len(userMessage))],
+				"rewritten", rewritten.Requirement[:min(50, len(rewritten.Requirement))],
 			)
 			return rewritten.Requirement
 		}
 	}
 
 	return userMessage
-}
-
-// minLen returns the smaller of two integers.
-func minLen(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

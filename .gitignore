@@ -1,5 +1,6 @@
-# Trae IDE
+# IDE
 .trae
+.codebuddy
 
 # Node.js
 node_modules/

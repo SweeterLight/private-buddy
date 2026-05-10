@@ -7,19 +7,15 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"time"
 
 	"private-buddy-server/internal/config"
+	"private-buddy-server/internal/database"
 	"private-buddy-server/internal/model"
 	"private-buddy-server/internal/service/llm"
 	taskcontext "private-buddy-server/internal/service/task/context"
 	"private-buddy-server/internal/service/task/tools"
 
-	openai "github.com/sashabaranov/go-openai"
-
 	applogger "private-buddy-server/internal/logger"
-
-	"gorm.io/gorm"
 )
 
 // defaultMaxIterations is the default maximum number of ReAct loop iterations.
@@ -48,7 +44,6 @@ type TaskLoop struct {
 	toolRegistry     map[string]tools.Tool       // Tool name -> Tool mapping
 	contextManager   *taskcontext.ContextManager // Context manager with window control
 	maxIterations    int                         // Maximum number of loop iterations
-	db               *gorm.DB                    // Database for writing interaction records
 	sessionID        int64                       // Session ID for interaction records
 	userMsgID        int64                       // User message ID that triggered execution
 	agentMsgID       int64                       // Agent message ID for the delivery target
@@ -65,7 +60,6 @@ func NewTaskLoop(
 	toolList []tools.Tool,
 	contextManager *taskcontext.ContextManager,
 	maxIterations int,
-	db *gorm.DB,
 	sessionID, userMsgID, agentMsgID int64,
 	writeNotesTool *tools.WriteNotesTool,
 ) *TaskLoop {
@@ -80,7 +74,6 @@ func NewTaskLoop(
 		toolRegistry:   registry,
 		contextManager: contextManager,
 		maxIterations:  maxIterations,
-		db:             db,
 		sessionID:      sessionID,
 		userMsgID:      userMsgID,
 		agentMsgID:     agentMsgID,
@@ -90,9 +83,9 @@ func NewTaskLoop(
 
 // LoopResult represents the outcome of the task loop execution.
 type LoopResult struct {
-	Status string  `json:"status"`           // "success" or "failure"
-	Result *string `json:"result,omitempty"` // Final content on success
-	Reason *string `json:"reason,omitempty"` // Failure reason on failure
+	Status string `json:"status"`           // "success" or "failure"
+	Result string `json:"result,omitempty"` // Final content on success
+	Reason string `json:"reason,omitempty"` // Failure reason on failure
 }
 
 // Run executes the agent loop.
@@ -139,13 +132,12 @@ func (tl *TaskLoop) Run() *LoopResult {
 		response, err := tl.invokeLLM(messages)
 		if err != nil {
 			applogger.L.Error("TaskLoop LLM error", "iteration", iteration, "error", err)
-			reason := fmt.Sprintf("LLM invocation failed at iteration %d: %s", iteration, err.Error())
-			return &LoopResult{Status: "failure", Reason: &reason}
+			return &LoopResult{Status: "failure", Reason: fmt.Sprintf("LLM invocation failed at iteration %d: %s", iteration, err.Error())}
 		}
 
-		finishReason := string(response.Choices[0].FinishReason)
-		content := response.Choices[0].Message.Content
-		toolCalls := response.Choices[0].Message.ToolCalls
+		finishReason := response.FinishReason
+		content := response.Content
+		toolCalls := response.ToolCalls
 
 		switch finishReason {
 		case "stop":
@@ -200,22 +192,20 @@ func (tl *TaskLoop) Run() *LoopResult {
 		case "stop":
 			applogger.L.Info("TaskLoop completed", "iteration", iteration)
 			tl.updateNotesOnSuccess(iteration, content, messages)
-			return &LoopResult{Status: "success", Result: &content}
+			return &LoopResult{Status: "success", Result: content}
 
 		case "tool_calls":
 			if content != "" {
-				applogger.L.Info("TaskLoop thoughts", "iteration", iteration, "thoughts", content[:minInt(500, len(content))])
+				applogger.L.Info("TaskLoop thoughts", "iteration", iteration, "thoughts", content[:min(500, len(content))])
 			}
 
-			assistantMsg := map[string]interface{}{
-				"role":       "assistant",
-				"tool_calls": toolCalls,
-			}
-			if content != "" {
-				assistantMsg["content"] = content
+			assistantMsg := llm.Message{
+				Role:      "assistant",
+				Content:   content,
+				ToolCalls: toolCalls,
 			}
 
-			var toolResults []map[string]interface{}
+			var toolResults []llm.Message
 			hasWriteNotes := false
 			for _, tc := range toolCalls {
 				if tc.Function.Name == "write_notes" {
@@ -235,22 +225,22 @@ func (tl *TaskLoop) Run() *LoopResult {
 		case "length":
 			applogger.L.Warn("TaskLoop finish_reason=length", "iteration", iteration)
 
-			assistantMsg := map[string]interface{}{"role": "assistant"}
-			if content != "" {
-				assistantMsg["content"] = content
+			assistantMsg := llm.Message{
+				Role:    "assistant",
+				Content: content,
 			}
 			if len(toolCalls) > 0 {
-				assistantMsg["tool_calls"] = toolCalls
+				assistantMsg.ToolCalls = toolCalls
 			}
 
-			tl.contextManager.AddIteration(assistantMsg, []map[string]interface{}{})
+			tl.contextManager.AddIteration(assistantMsg, nil)
 
 			tl.contextManager.AddIteration(
-				map[string]interface{}{
-					"role":    "user",
-					"content": "[System] Your previous response was truncated due to length limits. Your tool calls were NOT executed. Please continue with a more concise response.",
+				llm.Message{
+					Role:    "user",
+					Content: "[System] Your previous response was truncated due to length limits. Your tool calls were NOT executed. Please continue with a more concise response.",
 				},
-				[]map[string]interface{}{},
+				nil,
 			)
 
 		default:
@@ -259,7 +249,7 @@ func (tl *TaskLoop) Run() *LoopResult {
 	}
 
 	reason := fmt.Sprintf("Task did not complete within %d iterations", tl.maxIterations)
-	return &LoopResult{Status: "failure", Reason: &reason}
+	return &LoopResult{Status: "failure", Reason: reason}
 }
 
 // isCheckpointIteration checks if this iteration should be a forced notes checkpoint.
@@ -286,12 +276,11 @@ func (tl *TaskLoop) isCheckpointIteration(iteration int) bool {
 //
 // On final iteration (isFinal=true), returns failure result after saving notes.
 // On checkpoint iteration, returns success to continue the loop.
-func (tl *TaskLoop) runNotesIteration(iteration int, messages []map[string]interface{}, isFinal bool) *LoopResult {
+func (tl *TaskLoop) runNotesIteration(iteration int, messages []llm.Message, isFinal bool) *LoopResult {
 	if tl.writeNotesTool == nil {
 		applogger.L.Error("Cannot run notes iteration: write_notes_tool not initialized")
 		if isFinal {
-			reason := "Task did not complete within max iterations"
-			return &LoopResult{Status: "failure", Reason: &reason}
+			return &LoopResult{Status: "failure", Reason: "Task did not complete within max iterations"}
 		}
 		return &LoopResult{Status: "success"}
 	}
@@ -347,9 +336,9 @@ Each entry is APPENDED, not overwritten. Include file references when relevant.
 After writing notes, you will regain access to all tools.`
 	}
 
-	messagesWithCheckpoint := append(messages, map[string]interface{}{
-		"role":    "user",
-		"content": checkpointMsg,
+	messagesWithCheckpoint := append(messages, llm.Message{
+		Role:    "user",
+		Content: checkpointMsg,
 	})
 
 	tl.writeInteraction(iteration, model.InteractionTypeRequest, map[string]interface{}{
@@ -357,25 +346,19 @@ After writing notes, you will regain access to all tools.`
 		"is_checkpoint": true,
 	})
 
-	schemas := []openai.FunctionDefinition{tl.writeNotesTool.Schema()}
-	toolDefs := []openai.Tool{{
-		Type:     openai.ToolTypeFunction,
-		Function: &schemas[0],
-	}}
-	response, err := tl.checkpointClient.ChatWithTools(context.Background(), toOpenAIMessages(messagesWithCheckpoint), toolDefs)
+	toolDefs := []llm.FunctionDefinition{tl.writeNotesTool.Schema()}
+	response, err := tl.checkpointClient.ChatWithTools(context.Background(), messagesWithCheckpoint, toolDefs)
 	if err != nil {
 		applogger.L.Error("Notes iteration LLM error", "error", err)
 		if isFinal {
-			reason := "Task did not complete within max iterations"
-			return &LoopResult{Status: "failure", Reason: &reason}
+			return &LoopResult{Status: "failure", Reason: "Task did not complete within max iterations"}
 		}
-		reason := fmt.Sprintf("Notes iteration LLM invocation failed: %s", err.Error())
-		return &LoopResult{Status: "failure", Reason: &reason}
+		return &LoopResult{Status: "failure", Reason: fmt.Sprintf("Notes iteration LLM invocation failed: %s", err.Error())}
 	}
 
-	finishReason := string(response.Choices[0].FinishReason)
-	content := response.Choices[0].Message.Content
-	toolCalls := response.Choices[0].Message.ToolCalls
+	finishReason := response.FinishReason
+	content := response.Content
+	toolCalls := response.ToolCalls
 
 	tl.writeInteraction(iteration, model.InteractionTypeResponse, map[string]interface{}{
 		"content":       content,
@@ -385,16 +368,16 @@ After writing notes, you will regain access to all tools.`
 	})
 
 	if finishReason == "tool_calls" {
-		var toolResults []map[string]interface{}
+		var toolResults []llm.Message
 		for _, tc := range toolCalls {
 			toolCallID := tc.ID
 
 			if tc.Function.Name != "write_notes" {
 				applogger.L.Warn("Notes iteration: unexpected tool call", "tool", tc.Function.Name)
-				toolResults = append(toolResults, map[string]interface{}{
-					"role":         "tool",
-					"tool_call_id": toolCallID,
-					"content":      fmt.Sprintf("Error: tool '%s' is not available during notes iteration", tc.Function.Name),
+				toolResults = append(toolResults, llm.Message{
+					Role:       "tool",
+					ToolCallID: toolCallID,
+					Content:    fmt.Sprintf("Error: tool '%s' is not available during notes iteration", tc.Function.Name),
 				})
 				continue
 			}
@@ -405,22 +388,20 @@ After writing notes, you will regain access to all tools.`
 			applogger.L.Info("Notes iteration: executing write_notes")
 			result, _ := tl.writeNotesTool.Execute(args)
 
-			toolResults = append(toolResults, map[string]interface{}{
-				"role":         "tool",
-				"tool_call_id": toolCallID,
-				"content":      result,
+			toolResults = append(toolResults, llm.Message{
+				Role:       "tool",
+				ToolCallID: toolCallID,
+				Content:    result,
 			})
 		}
 
 		tl.lastNotesIter = iteration
 		tl.contextManager.RefreshNotes(tl.writeNotesTool.ReadNotes())
 
-		assistantMsg := map[string]interface{}{
-			"role":       "assistant",
-			"tool_calls": toolCalls,
-		}
-		if content != "" {
-			assistantMsg["content"] = content
+		assistantMsg := llm.Message{
+			Role:      "assistant",
+			Content:   content,
+			ToolCalls: toolCalls,
 		}
 
 		tl.contextManager.AddIteration(assistantMsg, toolResults)
@@ -429,8 +410,7 @@ After writing notes, you will regain access to all tools.`
 	applogger.L.Info("Notes iteration completed", "iteration", iteration)
 
 	if isFinal {
-		reason := "Task did not complete within max iterations. Notes have been saved for next execution."
-		return &LoopResult{Status: "failure", Reason: &reason}
+		return &LoopResult{Status: "failure", Reason: "Task did not complete within max iterations. Notes have been saved for next execution."}
 	}
 
 	return &LoopResult{Status: "success"}
@@ -439,7 +419,7 @@ After writing notes, you will regain access to all tools.`
 // updateNotesOnSuccess updates notes after successful task completion.
 // This ensures notes reflect the final state for future modifications.
 // Uses the checkpoint client (lazy-initialized) with only write_notes tool available.
-func (tl *TaskLoop) updateNotesOnSuccess(iteration int, finalContent string, messages []map[string]interface{}) {
+func (tl *TaskLoop) updateNotesOnSuccess(iteration int, finalContent string, messages []llm.Message) {
 	if tl.writeNotesTool == nil {
 		return
 	}
@@ -464,27 +444,20 @@ Use write_notes to APPEND a summary entry:
 
 This will help you continue work if the user requests changes later.`
 
-	messagesWithUpdate := append(messages, map[string]interface{}{
-		"role":    "user",
-		"content": successMsg,
+	messagesWithUpdate := append(messages, llm.Message{
+		Role:    "user",
+		Content: successMsg,
 	})
 
-	schemas := []openai.FunctionDefinition{tl.writeNotesTool.Schema()}
-	toolDefs := []openai.Tool{{
-		Type:     openai.ToolTypeFunction,
-		Function: &schemas[0],
-	}}
-	response, err := tl.checkpointClient.ChatWithTools(context.Background(), toOpenAIMessages(messagesWithUpdate), toolDefs)
+	toolDefs := []llm.FunctionDefinition{tl.writeNotesTool.Schema()}
+	response, err := tl.checkpointClient.ChatWithTools(context.Background(), messagesWithUpdate, toolDefs)
 	if err != nil {
 		applogger.L.Error("Notes update on success failed", "error", err)
 		return
 	}
 
-	finishReason := string(response.Choices[0].FinishReason)
-	toolCalls := response.Choices[0].Message.ToolCalls
-
-	if finishReason == "tool_calls" {
-		for _, tc := range toolCalls {
+	if response.FinishReason == "tool_calls" {
+		for _, tc := range response.ToolCalls {
 			if tc.Function.Name != "write_notes" {
 				continue
 			}
@@ -500,23 +473,14 @@ This will help you continue work if the user requests changes later.`
 }
 
 // invokeLLM calls the LLM with the current messages and all registered tools.
-// Converts internal message format to OpenAI format and binds tool schemas.
-func (tl *TaskLoop) invokeLLM(messages []map[string]interface{}) (*openai.ChatCompletionResponse, error) {
+// Converts internal message format and binds tool schemas.
+func (tl *TaskLoop) invokeLLM(messages []llm.Message) (llm.ToolResponse, error) {
 	msgSummary := make([]map[string]interface{}, 0, len(messages))
 	for _, m := range messages {
-		role, _ := m["role"].(string)
-		content, _ := m["content"].(string)
-		toolCallsRaw, _ := m["tool_calls"]
-		tcCount := 0
-		if tcSlice, ok := toolCallsRaw.([]openai.ToolCall); ok {
-			tcCount = len(tcSlice)
-		} else if tcSlice, ok := toolCallsRaw.([]interface{}); ok {
-			tcCount = len(tcSlice)
-		}
 		msgSummary = append(msgSummary, map[string]interface{}{
-			"role":        role,
-			"content_len": len(content),
-			"tool_calls":  tcCount,
+			"role":        m.Role,
+			"content_len": len(m.Content),
+			"tool_calls":  len(m.ToolCalls),
 		})
 	}
 	applogger.L.Debug("TaskLoop invoking LLM",
@@ -524,41 +488,36 @@ func (tl *TaskLoop) invokeLLM(messages []map[string]interface{}) (*openai.ChatCo
 		"detail", fmt.Sprintf("%v", msgSummary),
 	)
 
-	chatMessages := toOpenAIMessages(messages)
-	toolDefs := make([]openai.Tool, 0, len(tl.toolRegistry))
+	toolDefs := make([]llm.FunctionDefinition, 0, len(tl.toolRegistry))
 	for _, t := range tl.toolRegistry {
-		schema := t.Schema()
-		toolDefs = append(toolDefs, openai.Tool{
-			Type:     openai.ToolTypeFunction,
-			Function: &schema,
-		})
+		toolDefs = append(toolDefs, t.Schema())
 	}
-	return tl.llmClient.ChatWithTools(context.Background(), chatMessages, toolDefs)
+	return tl.llmClient.ChatWithTools(context.Background(), messages, toolDefs)
 }
 
 // executeToolCall executes a single tool call and returns the result.
 // Looks up the tool in the registry, parses arguments, and calls Execute.
 // Returns error messages for unknown tools or invalid arguments.
-func (tl *TaskLoop) executeToolCall(tc openai.ToolCall) map[string]interface{} {
+func (tl *TaskLoop) executeToolCall(tc llm.ToolCall) llm.Message {
 	toolCallID := tc.ID
 	toolName := tc.Function.Name
 	argsStr := tc.Function.Arguments
 
 	var args map[string]interface{}
 	if err := json.Unmarshal([]byte(argsStr), &args); err != nil {
-		return map[string]interface{}{
-			"role":         "tool",
-			"tool_call_id": toolCallID,
-			"content":      fmt.Sprintf("Error: invalid arguments format - %s", err.Error()),
+		return llm.Message{
+			Role:       "tool",
+			ToolCallID: toolCallID,
+			Content:    fmt.Sprintf("Error: invalid arguments format - %s", err.Error()),
 		}
 	}
 
 	tool, ok := tl.toolRegistry[toolName]
 	if !ok {
-		return map[string]interface{}{
-			"role":         "tool",
-			"tool_call_id": toolCallID,
-			"content":      fmt.Sprintf("Error: unknown tool '%s'", toolName),
+		return llm.Message{
+			Role:       "tool",
+			ToolCallID: toolCallID,
+			Content:    fmt.Sprintf("Error: unknown tool '%s'", toolName),
 		}
 	}
 
@@ -570,19 +529,19 @@ func (tl *TaskLoop) executeToolCall(tc openai.ToolCall) map[string]interface{} {
 		result = fmt.Sprintf("Error executing tool '%s': %s", toolName, err.Error())
 	}
 
-	return map[string]interface{}{
-		"role":         "tool",
-		"tool_call_id": toolCallID,
-		"content":      result,
+	return llm.Message{
+		Role:       "tool",
+		ToolCallID: toolCallID,
+		Content:    result,
 	}
 }
 
 // writeInteraction writes an interaction record to the database.
-// Silently skips if database session is not configured.
+// Silently skips if session is not configured.
 // Records are grouped by (session_id, user_msg_id, agent_msg_id, iteration)
 // to support both frontend display and debugging.
 func (tl *TaskLoop) writeInteraction(iteration, interactionType int, data map[string]interface{}) {
-	if tl.db == nil || tl.sessionID == 0 {
+	if tl.sessionID == 0 {
 		return
 	}
 
@@ -595,46 +554,9 @@ func (tl *TaskLoop) writeInteraction(iteration, interactionType int, data map[st
 		Type:       interactionType,
 		Data:       string(dataJSON),
 	}
-	if err := tl.db.Create(&record).Error; err != nil {
+	if err := database.DB.Create(&record).Error; err != nil {
 		applogger.L.Error("Failed to write interaction record", "error", err)
 	}
-}
-
-// toOpenAIMessages converts internal message dicts to OpenAI ChatCompletionMessage format.
-// Handles role, content, tool_calls, and tool_call_id fields.
-func toOpenAIMessages(messages []map[string]interface{}) []openai.ChatCompletionMessage {
-	result := make([]openai.ChatCompletionMessage, 0, len(messages))
-	for _, m := range messages {
-		role, _ := m["role"].(string)
-		content, _ := m["content"].(string)
-
-		msg := openai.ChatCompletionMessage{
-			Role:    role,
-			Content: content,
-		}
-
-		if toolCallsRaw, ok := m["tool_calls"]; ok {
-			switch tc := toolCallsRaw.(type) {
-			case []openai.ToolCall:
-				msg.ToolCalls = tc
-			}
-		}
-
-		if toolCallID, ok := m["tool_call_id"].(string); ok && toolCallID != "" {
-			msg.ToolCallID = toolCallID
-		}
-
-		result = append(result, msg)
-	}
-	return result
-}
-
-// minInt returns the smaller of two integers.
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // getWorkspaceRoot returns the root directory for all session workspaces.
@@ -647,55 +569,25 @@ func getSessionWorkspace(sessionID int64) string {
 	return filepath.Join(getWorkspaceRoot(), strconv.FormatInt(sessionID, 10))
 }
 
-// getMetaDir returns the .meta directory path for a session workspace.
+// getMetaDir returns the meta directory path for a session.
 func getMetaDir(sessionID int64) string {
 	return filepath.Join(getSessionWorkspace(sessionID), ".meta")
 }
 
-// getOutputDir returns the output directory path (LLM's working directory) for a session.
+// getOutputDir returns the output directory path for a session.
 func getOutputDir(sessionID int64) string {
 	return filepath.Join(getSessionWorkspace(sessionID), "output")
 }
 
-// ensureSessionWorkspace creates the workspace directory structure for a session.
-// Creates the root workspace directory if it doesn't exist.
-func ensureSessionWorkspace(sessionID int64) string {
-	root := getWorkspaceRoot()
-	os.MkdirAll(root, 0755)
-
-	workspace := getSessionWorkspace(sessionID)
-	os.MkdirAll(workspace, 0755)
-
-	applogger.L.Info("Workspace ensured for session", "session_id", sessionID, "path", workspace)
-	return workspace
-}
-
-// initSessionWorkspace initializes workspace structure for agent execution.
-//
-// Creates:
-//   - .meta/task.md with rewritten task requirement (appends if exists, tasks may evolve)
-//   - .meta/notes.md as empty file (structured, append-only; kept across executions)
-//   - output/ directory (LLM's working directory; kept across executions)
-//
-// If workspace already exists (from previous execution in same session):
-//   - .meta/task.md: append rewritten requirement with timestamp
-//   - .meta/notes.md: keep as-is (agent's memory across executions)
-//   - output/: keep as-is (previous deliverables)
+// initSessionWorkspace creates the workspace directory structure for a session.
+// Initializes task.md and notes.md in the .meta directory if they don't exist.
 func initSessionWorkspace(sessionID int64, rewrittenRequirement string) string {
-	workspace := ensureSessionWorkspace(sessionID)
-
-	metaDir := getMetaDir(sessionID)
+	workspace := getSessionWorkspace(sessionID)
+	metaDir := filepath.Join(workspace, ".meta")
 	os.MkdirAll(metaDir, 0755)
 
 	taskFile := filepath.Join(metaDir, "task.md")
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
-	if _, err := os.Stat(taskFile); err == nil {
-		f, _ := os.OpenFile(taskFile, os.O_APPEND|os.O_WRONLY, 0644)
-		if f != nil {
-			f.WriteString(fmt.Sprintf("\n\n---\n\n## [%s] Task Update\n\n%s", timestamp, rewrittenRequirement))
-			f.Close()
-		}
-	} else {
+	if _, err := os.Stat(taskFile); err != nil {
 		os.WriteFile(taskFile, []byte(fmt.Sprintf("# Task\n\n%s", rewrittenRequirement)), 0644)
 	}
 

@@ -1,37 +1,32 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"private-buddy-server/internal/database"
 	"private-buddy-server/internal/model"
 	"private-buddy-server/internal/schema"
 	"private-buddy-server/internal/service"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 )
 
 type Handler struct {
-	db            *gorm.DB
 	crudLLM       *service.CRUDBase[model.LLMConfig]
 	crudEmbedding *service.CRUDBase[model.EmbeddingConfig]
 	crudAgent     *service.CRUDBase[model.Agent]
 	crudSession   *service.CRUDBase[model.Session]
-	dataService   *service.DataService
-	searchService *service.SearchService
 }
 
-func NewHandler(db *gorm.DB) *Handler {
+func NewHandler() *Handler {
 	return &Handler{
-		db:            db,
-		crudLLM:       service.NewCRUDBase[model.LLMConfig](db, "LLM config"),
-		crudEmbedding: service.NewCRUDBase[model.EmbeddingConfig](db, "Embedding config"),
-		crudAgent:     service.NewCRUDBase[model.Agent](db, "Agent"),
-		crudSession:   service.NewCRUDBase[model.Session](db, "Session"),
-		dataService:   service.NewDataService(),
-		searchService: service.NewSearchService(),
+		crudLLM:       service.NewCRUDBase[model.LLMConfig]("LLM config"),
+		crudEmbedding: service.NewCRUDBase[model.EmbeddingConfig]("Embedding config"),
+		crudAgent:     service.NewCRUDBase[model.Agent]("Agent"),
+		crudSession:   service.NewCRUDBase[model.Session]("Session"),
 	}
 }
 
@@ -41,7 +36,7 @@ func (h *Handler) Root(c *gin.Context) {
 
 func (h *Handler) GetVersion(c *gin.Context) {
 	var versionRecord model.DBVersion
-	err := h.db.Order("id DESC").First(&versionRecord).Error
+	err := database.DB.Order("id DESC").First(&versionRecord).Error
 	version := "0.0.0"
 	if err == nil {
 		version = versionRecord.Version
@@ -62,7 +57,7 @@ func (h *Handler) CreateLLMConfig(c *gin.Context) {
 		APIKey:      req.APIKey,
 		Description: derefString(req.Description),
 	}
-	if err := h.db.Select(
+	if err := database.DB.Select(
 		"Name", "ModelID", "BaseURL", "APIKey", "Description",
 	).Create(&entity).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
@@ -106,7 +101,7 @@ func (h *Handler) UpdateLLMConfig(c *gin.Context) {
 	updates := req.BuildUpdates()
 	if len(updates) > 0 {
 		h.crudLLM.Update(entity, updates)
-		h.db.First(entity, id)
+		database.DB.First(entity, id)
 	}
 	c.JSON(http.StatusOK, schema.NewLLMConfigResponse(entity))
 }
@@ -119,7 +114,7 @@ func (h *Handler) DeleteLLMConfig(c *gin.Context) {
 		return
 	}
 	var referencingAgents []model.Agent
-	h.db.Where("llm_config_id = ?", id).Find(&referencingAgents)
+	database.DB.Where("llm_config_id = ?", id).Find(&referencingAgents)
 	if len(referencingAgents) > 0 {
 		names := make([]string, len(referencingAgents))
 		for i, a := range referencingAgents {
@@ -147,7 +142,7 @@ func (h *Handler) CreateEmbeddingConfig(c *gin.Context) {
 		APIKey:      req.APIKey,
 		Description: req.Description,
 	}
-	if err := h.db.Select(
+	if err := database.DB.Select(
 		"Name", "ModelID", "BaseURL", "APIKey", "Description",
 	).Create(&entity).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
@@ -191,7 +186,7 @@ func (h *Handler) UpdateEmbeddingConfig(c *gin.Context) {
 	updates := req.BuildUpdates()
 	if len(updates) > 0 {
 		h.crudEmbedding.Update(entity, updates)
-		h.db.First(entity, id)
+		database.DB.First(entity, id)
 	}
 	c.JSON(http.StatusOK, schema.NewEmbeddingConfigResponse(entity))
 }
@@ -203,7 +198,7 @@ func (h *Handler) DeleteEmbeddingConfig(c *gin.Context) {
 		service.HandleNotFound(c, "Embedding config", id)
 		return
 	}
-	h.db.Model(&model.Agent{}).Where("embedding_config_id = ?", id).Update("embedding_config_id", 0)
+	database.DB.Model(&model.Agent{}).Where("embedding_config_id = ?", id).Update("embedding_config_id", 0)
 	h.crudEmbedding.Delete(id)
 	c.JSON(http.StatusOK, gin.H{"message": "Embedding config deleted successfully"})
 }
@@ -214,6 +209,11 @@ func (h *Handler) CreateAgent(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 		return
 	}
+	kbIDsJSON := "[]"
+	if len(req.KnowledgeBaseIDs) > 0 {
+		data, _ := json.Marshal(req.KnowledgeBaseIDs)
+		kbIDsJSON = string(data)
+	}
 	entity := model.Agent{
 		Name:              req.Name,
 		CharacterSettings: req.CharacterSettings,
@@ -221,9 +221,10 @@ func (h *Handler) CreateAgent(c *gin.Context) {
 		EmbeddingConfigID: req.EmbeddingConfigID,
 		Description:       req.Description,
 		Avatar:            req.Avatar,
+		KnowledgeBaseIDs:  kbIDsJSON,
 	}
-	if err := h.db.Select(
-		"Name", "CharacterSettings", "LLMConfigID", "EmbeddingConfigID", "Description", "Avatar",
+	if err := database.DB.Select(
+		"Name", "CharacterSettings", "LLMConfigID", "EmbeddingConfigID", "Description", "Avatar", "KnowledgeBaseIDs",
 	).Create(&entity).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
 		return
@@ -243,7 +244,7 @@ func (h *Handler) ListAgents(c *gin.Context) {
 
 func (h *Handler) ListAgentsWithSessions(c *gin.Context) {
 	var agents []model.Agent
-	h.db.Order("updated_at DESC").Find(&agents)
+	database.DB.Order("updated_at DESC").Find(&agents)
 
 	if len(agents) == 0 {
 		c.JSON(http.StatusOK, []schema.AgentWithSessions{})
@@ -256,7 +257,7 @@ func (h *Handler) ListAgentsWithSessions(c *gin.Context) {
 	}
 
 	var allSessions []model.Session
-	h.db.Where("agent_id IN ?", agentIDs).Order("updated_at DESC").Find(&allSessions)
+	database.DB.Where("agent_id IN ?", agentIDs).Order("updated_at DESC").Find(&allSessions)
 
 	sessionsByAgent := make(map[int64][]model.Session)
 	for _, s := range allSessions {
@@ -302,7 +303,7 @@ func (h *Handler) UpdateAgent(c *gin.Context) {
 	updates := req.BuildUpdates()
 	if len(updates) > 0 {
 		h.crudAgent.Update(entity, updates)
-		h.db.First(entity, id)
+		database.DB.First(entity, id)
 	}
 	c.JSON(http.StatusOK, schema.NewAgentResponse(entity))
 }
@@ -321,13 +322,13 @@ func (h *Handler) DeleteAgent(c *gin.Context) {
 	}
 
 	var sessionIDs []int64
-	h.db.Model(&model.Session{}).Where("agent_id = ?", id).Pluck("id", &sessionIDs)
+	database.DB.Model(&model.Session{}).Where("agent_id = ?", id).Pluck("id", &sessionIDs)
 
 	if len(sessionIDs) > 0 {
-		h.db.Where("session_id IN ?", sessionIDs).Delete(&model.Interaction{})
-		h.db.Where("session_id IN ?", sessionIDs).Delete(&model.HistoricalSummary{})
-		h.db.Where("session_id IN ?", sessionIDs).Delete(&model.Message{})
-		h.db.Where("agent_id = ?", id).Delete(&model.Session{})
+		database.DB.Where("session_id IN ?", sessionIDs).Delete(&model.Interaction{})
+		database.DB.Where("session_id IN ?", sessionIDs).Delete(&model.HistoricalSummary{})
+		database.DB.Where("session_id IN ?", sessionIDs).Delete(&model.Message{})
+		database.DB.Where("agent_id = ?", id).Delete(&model.Session{})
 
 		for _, sid := range sessionIDs {
 			removeSessionWorkspace(sid)
@@ -353,7 +354,7 @@ func (h *Handler) CreateSession(c *gin.Context) {
 		AgentID: req.AgentID,
 		Status:  model.SessionStatusIdle,
 	}
-	if err := h.db.Select("Title", "AgentID", "Status").Create(&entity).Error; err != nil {
+	if err := database.DB.Select("Title", "AgentID", "Status").Create(&entity).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
 		return
 	}
@@ -395,7 +396,7 @@ func (h *Handler) UpdateSession(c *gin.Context) {
 	updates := req.BuildUpdates()
 	if len(updates) > 0 {
 		h.crudSession.Update(entity, updates)
-		h.db.First(entity, id)
+		database.DB.First(entity, id)
 	}
 	c.JSON(http.StatusOK, schema.NewSessionResponse(entity))
 }
@@ -408,9 +409,9 @@ func (h *Handler) DeleteSession(c *gin.Context) {
 		return
 	}
 
-	h.db.Where("session_id = ?", id).Delete(&model.Interaction{})
-	h.db.Where("session_id = ?", id).Delete(&model.HistoricalSummary{})
-	h.db.Where("session_id = ?", id).Delete(&model.Message{})
+	database.DB.Where("session_id = ?", id).Delete(&model.Interaction{})
+	database.DB.Where("session_id = ?", id).Delete(&model.HistoricalSummary{})
+	database.DB.Where("session_id = ?", id).Delete(&model.Message{})
 	h.crudSession.Delete(id)
 	removeSessionWorkspace(id)
 	c.JSON(http.StatusOK, gin.H{"message": "Session deleted successfully"})
@@ -419,7 +420,7 @@ func (h *Handler) DeleteSession(c *gin.Context) {
 func (h *Handler) CreateMessage(c *gin.Context) {
 	sessionID := getPathID(c)
 	var session model.Session
-	if err := h.db.First(&session, sessionID).Error; err != nil {
+	if err := database.DB.First(&session, sessionID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "Session not found"})
 		return
 	}
@@ -435,7 +436,7 @@ func (h *Handler) CreateMessage(c *gin.Context) {
 		Status:          model.MessageStatusCompleted,
 		HasInteractions: model.HasInteractionsNone,
 	}
-	if err := h.db.Create(&entity).Error; err != nil {
+	if err := database.DB.Create(&entity).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
 		return
 	}
@@ -445,17 +446,17 @@ func (h *Handler) CreateMessage(c *gin.Context) {
 func (h *Handler) ListMessages(c *gin.Context) {
 	sessionID := getPathID(c)
 	var session model.Session
-	if err := h.db.First(&session, sessionID).Error; err != nil {
+	if err := database.DB.First(&session, sessionID).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "Session not found"})
 		return
 	}
 	var messages []model.Message
-	h.db.Where("session_id = ?", sessionID).Order("created_at ASC").Find(&messages)
+	database.DB.Where("session_id = ?", sessionID).Order("created_at ASC").Find(&messages)
 	c.JSON(http.StatusOK, schema.NewMessageResponseList(messages))
 }
 
 func (h *Handler) GetSearchConfig(c *gin.Context) {
-	config := h.searchService.GetConfig(h.db)
+	config := service.GetSearchConfig()
 	c.JSON(http.StatusOK, schema.NewSearchConfigResponse(config))
 }
 
@@ -465,7 +466,7 @@ func (h *Handler) UpdateSearchConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
 		return
 	}
-	config := h.searchService.UpdateConfig(h.db, req.Provider, req.APIKey, req.Description, req.IsActive)
+	config := service.UpdateSearchConfig(req.Provider, req.APIKey, req.Description, req.IsActive)
 	c.JSON(http.StatusOK, schema.NewSearchConfigResponse(config))
 }
 
@@ -477,7 +478,7 @@ func (h *Handler) GetInteractions(c *gin.Context) {
 		return
 	}
 	var interactions []model.Interaction
-	h.db.Where("agent_msg_id = ?", agentMsgID).Order("iteration, type").Find(&interactions)
+	database.DB.Where("agent_msg_id = ?", agentMsgID).Order("iteration, type").Find(&interactions)
 	c.JSON(http.StatusOK, schema.InteractionListResponse{
 		Interactions: schema.NewInteractionResponseList(interactions),
 	})
@@ -486,7 +487,7 @@ func (h *Handler) GetInteractions(c *gin.Context) {
 func (h *Handler) GetInteractionStatus(c *gin.Context) {
 	id := getPathID(c)
 	var message model.Message
-	if err := h.db.First(&message, id).Error; err != nil {
+	if err := database.DB.First(&message, id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"detail": "Message not found"})
 		return
 	}

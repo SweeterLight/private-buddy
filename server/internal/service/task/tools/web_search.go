@@ -8,8 +8,7 @@ import (
 	"net/http"
 
 	"private-buddy-server/internal/model"
-
-	"github.com/sashabaranov/go-openai"
+	"private-buddy-server/internal/service/llm"
 )
 
 // WebSearchTool searches the web for information using configured search providers.
@@ -26,8 +25,8 @@ func NewWebSearchTool(searchConfig *model.SearchConfig) *WebSearchTool {
 
 func (w *WebSearchTool) Name() string { return "web_search" }
 
-func (w *WebSearchTool) Schema() openai.FunctionDefinition {
-	return openai.FunctionDefinition{
+func (w *WebSearchTool) Schema() llm.FunctionDefinition {
+	return llm.FunctionDefinition{
 		Name:        "web_search",
 		Description: "Search the web for information. Use this tool to find current information, documentation, or answers to questions.",
 		Parameters: map[string]interface{}{

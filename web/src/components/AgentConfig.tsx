@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Button, Modal, Form, Input, message, Select, Upload } from 'antd';
 import { EditOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
-import type { Agent, LLMConfig, EmbeddingConfig } from '../types';
-import { agentApi, llmConfigApi, embeddingConfigApi, uploadApi } from '../services/api';
+import type { Agent, LLMConfig, EmbeddingConfig, KnowledgeBase } from '../types';
+import { agentApi, llmConfigApi, embeddingConfigApi, kbApi, uploadApi } from '../services/api';
 import { logger } from '../logger';
 import { confirmDelete } from '../utils/confirm';
 import AgentAvatar from './AgentAvatar';
@@ -19,6 +19,7 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
   const [agents, setAgents] = useState<Agent[]>([]);
   const [llmConfigs, setLLMConfigs] = useState<LLMConfig[]>([]);
   const [embeddingConfigs, setEmbeddingConfigs] = useState<EmbeddingConfig[]>([]);
+  const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [editModalVisible, setEditModalVisible] = useState(false);
@@ -60,10 +61,20 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
     }
   };
 
+  const loadKnowledgeBases = async () => {
+    try {
+      const response = await kbApi.list();
+      setKnowledgeBases(response.data);
+    } catch (error) {
+      logger.error('Failed to load knowledge bases:', error);
+    }
+  };
+
   useEffect(() => {
     loadAgents();
     loadLLMConfigs();
     loadEmbeddingConfigs();
+    loadKnowledgeBases();
   }, []);
 
   useEffect(() => {
@@ -178,6 +189,7 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
       description: agent.description || '',
       llm_config_id: agent.llm_config_id,
       embedding_config_id: agent.embedding_config_id || 0,
+      knowledge_base_ids: agent.knowledge_base_ids || [],
     });
     setEditModalVisible(true);
   };
@@ -354,6 +366,23 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
               ))}
             </Select>
           </Form.Item>
+
+          <Form.Item
+            label={t('agent.knowledgeBaseIds')}
+            name="knowledge_base_ids"
+          >
+            <Select
+              mode="multiple"
+              placeholder={t('agent.knowledgeBaseIdsPlaceholder')}
+              allowClear
+            >
+              {knowledgeBases.map(kb => (
+                <Select.Option key={kb.id} value={kb.id}>
+                  {kb.name}
+                </Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
         </Form>
       </Modal>
 
@@ -441,6 +470,23 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
               {embeddingConfigs.map(config => (
                 <Select.Option key={config.id} value={config.id}>
                   {config.name}
+                </Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            label={t('agent.knowledgeBaseIds')}
+            name="knowledge_base_ids"
+          >
+            <Select
+              mode="multiple"
+              placeholder={t('agent.knowledgeBaseIdsPlaceholder')}
+              allowClear
+            >
+              {knowledgeBases.map(kb => (
+                <Select.Option key={kb.id} value={kb.id}>
+                  {kb.name}
                 </Select.Option>
               ))}
             </Select>

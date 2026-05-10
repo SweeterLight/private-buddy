@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.0.11] - 2026-05-11
+
+### Added
+- **Knowledge Base**: full KB lifecycle management — create, delete, document upload, async processing pipeline (extraction → chunking → embedding → indexing), per-KB isolated SQLite vector storage
+- **HNSW Index**: dual-mode indexing (Flat → HNSW) with auto-switching by vector count, CAS-based concurrent transition, lazy loading, and startup recovery
+- **RAG Integration**: Agent binds knowledge bases; chat pipeline retrieves from bound KBs concurrently and injects results into context
+- **Knowledge Base UI**: list/detail views with document upload, status tracking, and KB binding in Agent config
+
+### Changed
+- **Chat Pipeline**: reorganized with KB retrieval step between preprocessing and context assembly
+- **Document Deletion**: Document records hard-deleted, chunks soft-deleted with `deleted_count` tracking
+
+### Fixed
+- **Chat Window**: SSE reconnection on page refresh during streaming, race condition on session switch, temp-to-real session transition preserving streaming state
+
+
 ## [0.0.10] - 2026-05-08
 
 ### Added

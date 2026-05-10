@@ -4,7 +4,7 @@
 // task execution when the chat system determines that a user request requires
 // world interaction (e.g., file operations, web searches, code execution).
 //
-// The main entry point is TaskExecutor.Execute, which:
+// The main entry point is Execute, which:
 //  1. Initializes the session workspace structure
 //  2. Builds the system prompt and tool list
 //  3. Creates the context manager with iteration window
@@ -23,14 +23,13 @@ import (
 	"strings"
 
 	"private-buddy-server/internal/config"
+	"private-buddy-server/internal/database"
 	"private-buddy-server/internal/model"
 	"private-buddy-server/internal/service/llm"
 	taskcontext "private-buddy-server/internal/service/task/context"
 	"private-buddy-server/internal/service/task/tools"
 
 	applogger "private-buddy-server/internal/logger"
-
-	"gorm.io/gorm"
 )
 
 // TaskResult represents the outcome of a task execution.
@@ -47,22 +46,6 @@ type TaskResult struct {
 	NotesLength int    `json:"notes_length,omitempty"`
 }
 
-// TaskExecutor is the self-contained task execution service.
-//
-// This is the only public interface of the task module.
-// It accepts a task requirement and an LLM configuration,
-// runs the task loop internally, and returns a TaskResult.
-// The task executor is self-contained and autonomous — it creates its own
-// Task Loop, LLM client, tools, and context manager for each execution.
-// Nothing from the internal execution leaks into the chat context.
-type TaskExecutor struct {
-	db *gorm.DB
-}
-
-func NewTaskExecutor(db *gorm.DB) *TaskExecutor {
-	return &TaskExecutor{db: db}
-}
-
 // TaskParams contains all parameters needed for task execution.
 type TaskParams struct {
 	TaskRequirement string              // The rewritten task description to execute
@@ -77,20 +60,10 @@ type TaskParams struct {
 
 // Execute runs a task and returns the result.
 //
-// This method is the single entry point for task execution.
+// This is the single entry point for task execution.
 // It creates all necessary components internally and runs
 // the task loop to completion.
-//
-// Execution steps:
-//  1. Initialize workspace structure (.meta/task.md, .meta/notes.md, output/)
-//  2. Read workspace files (task content, notes content)
-//  3. Build system prompt with delivery type and available tools
-//  4. Create tool list (bash, write_notes, optionally web_search)
-//  5. Create ContextManager with iteration window
-//  6. Create LLM client with tool binding
-//  7. Run task loop to completion
-//  8. Read final notes and return TaskResult
-func (te *TaskExecutor) Execute(params TaskParams) *TaskResult {
+func Execute(params TaskParams) *TaskResult {
 	maxIterations := params.MaxIterations
 	if maxIterations <= 0 {
 		maxIterations = defaultMaxIterations
@@ -113,7 +86,7 @@ func (te *TaskExecutor) Execute(params TaskParams) *TaskResult {
 	writeNotesTool := tools.NewWriteNotesTool(params.SessionID, workspaceRoot, notesMaxChars)
 	notesContent := writeNotesTool.ReadNotes()
 
-	systemPrompt := te.buildSystemPrompt(params.SessionID, params.DeliveryType)
+	systemPrompt := buildSystemPrompt(params.SessionID, params.DeliveryType)
 
 	contextManager := taskcontext.NewContextManager(
 		systemPrompt,
@@ -129,7 +102,7 @@ func (te *TaskExecutor) Execute(params TaskParams) *TaskResult {
 		llm.TemperatureCreative,
 	)
 
-	toolList := te.buildToolList(workspace, params.SessionID, params.SearchConfig, workspaceRoot, notesMaxChars)
+	toolList := buildToolList(workspace, params.SessionID, params.SearchConfig, workspaceRoot, notesMaxChars)
 
 	taskLoop := NewTaskLoop(
 		llmClient,
@@ -137,7 +110,6 @@ func (te *TaskExecutor) Execute(params TaskParams) *TaskResult {
 		toolList,
 		contextManager,
 		maxIterations,
-		te.db,
 		params.SessionID,
 		params.UserMsgID,
 		params.AgentMsgID,
@@ -159,17 +131,17 @@ func (te *TaskExecutor) Execute(params TaskParams) *TaskResult {
 		result.NotesLength = len(finalNotes)
 	}
 
-	if loopResult.Status == "success" && loopResult.Result != nil {
+	if loopResult.Status == "success" && loopResult.Result != "" {
 		result.Status = "success"
-		result.Output = *loopResult.Result
+		result.Output = loopResult.Result
 		applogger.L.Info("TaskExecutor completed successfully",
 			"session_id", params.SessionID,
 			"output_len", len(result.Output),
 		)
 	} else {
 		result.Status = "failure"
-		if loopResult.Reason != nil {
-			result.Error = *loopResult.Reason
+		if loopResult.Reason != "" {
+			result.Error = loopResult.Reason
 		} else {
 			result.Error = "Unknown error"
 		}
@@ -184,10 +156,10 @@ func (te *TaskExecutor) Execute(params TaskParams) *TaskResult {
 
 // buildSystemPrompt constructs the system prompt for the task loop.
 // Includes basic rules, available tools, working directory, and delivery type guidance.
-func (te *TaskExecutor) buildSystemPrompt(sessionID int64, deliveryType string) string {
+func buildSystemPrompt(sessionID int64, deliveryType string) string {
 	workspace := getSessionWorkspace(sessionID)
 	workingDir := fmt.Sprintf("%s/output", workspace)
-	hasWebSearch := te.hasWebSearch()
+	hasWS := hasWebSearch()
 
 	parts := []string{
 		"You are a helpful AI agent that can execute tasks using tools.",
@@ -197,7 +169,7 @@ func (te *TaskExecutor) buildSystemPrompt(sessionID int64, deliveryType string) 
 		"- write_notes: Append structured entries to your notes.md",
 	}
 
-	if hasWebSearch {
+	if hasWS {
 		parts = append(parts, "- web_search: Search the web for information")
 	}
 
@@ -243,9 +215,9 @@ func (te *TaskExecutor) buildSystemPrompt(sessionID int64, deliveryType string) 
 }
 
 // hasWebSearch checks if web search is available via an active search config.
-func (te *TaskExecutor) hasWebSearch() bool {
+func hasWebSearch() bool {
 	var searchConfig model.SearchConfig
-	if err := te.db.First(&searchConfig).Error; err != nil {
+	if err := database.DB.First(&searchConfig).Error; err != nil {
 		return false
 	}
 	return searchConfig.IsAvailable()
@@ -253,7 +225,7 @@ func (te *TaskExecutor) hasWebSearch() bool {
 
 // buildToolList creates the list of available tools for the task loop.
 // Always includes bash and write_notes; adds web_search if search config is available.
-func (te *TaskExecutor) buildToolList(workspace string, sessionID int64, searchConfig *model.SearchConfig, workspaceRoot string, notesMaxChars int) []tools.Tool {
+func buildToolList(workspace string, sessionID int64, searchConfig *model.SearchConfig, workspaceRoot string, notesMaxChars int) []tools.Tool {
 	toolList := []tools.Tool{
 		tools.NewBashTool(workspace),
 		tools.NewWriteNotesTool(sessionID, workspaceRoot, notesMaxChars),

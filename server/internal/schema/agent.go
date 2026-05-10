@@ -1,29 +1,32 @@
 package schema
 
 import (
+	"encoding/json"
 	"time"
 
 	"private-buddy-server/internal/model"
 )
 
 type AgentBase struct {
-	Name              string `json:"name" binding:"required"`
-	CharacterSettings string `json:"character_settings"`
-	LLMConfigID       int64  `json:"llm_config_id" binding:"required"`
-	EmbeddingConfigID int64  `json:"embedding_config_id"`
-	Description       string `json:"description"`
-	Avatar            string `json:"avatar"`
+	Name              string  `json:"name" binding:"required"`
+	CharacterSettings string  `json:"character_settings"`
+	LLMConfigID       int64   `json:"llm_config_id" binding:"required"`
+	EmbeddingConfigID int64   `json:"embedding_config_id"`
+	Description       string  `json:"description"`
+	Avatar            string  `json:"avatar"`
+	KnowledgeBaseIDs  []int64 `json:"knowledge_base_ids"`
 }
 
 type AgentCreate AgentBase
 
 type AgentUpdate struct {
-	Name              *string `json:"name"`
-	CharacterSettings *string `json:"character_settings"`
-	LLMConfigID       *int64  `json:"llm_config_id"`
-	EmbeddingConfigID *int64  `json:"embedding_config_id"`
-	Description       *string `json:"description"`
-	Avatar            *string `json:"avatar"`
+	Name              *string  `json:"name"`
+	CharacterSettings *string  `json:"character_settings"`
+	LLMConfigID       *int64   `json:"llm_config_id"`
+	EmbeddingConfigID *int64   `json:"embedding_config_id"`
+	Description       *string  `json:"description"`
+	Avatar            *string  `json:"avatar"`
+	KnowledgeBaseIDs  *[]int64 `json:"knowledge_base_ids"`
 }
 
 type AgentResponse struct {
@@ -34,6 +37,7 @@ type AgentResponse struct {
 	EmbeddingConfigID int64     `json:"embedding_config_id"`
 	Description       string    `json:"description"`
 	Avatar            string    `json:"avatar"`
+	KnowledgeBaseIDs  []int64   `json:"knowledge_base_ids"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 }
@@ -52,6 +56,13 @@ type AgentWithSessions struct {
 }
 
 func NewAgentResponse(m *model.Agent) *AgentResponse {
+	var kbIDs []int64
+	if m.KnowledgeBaseIDs != "" && m.KnowledgeBaseIDs != "[]" {
+		json.Unmarshal([]byte(m.KnowledgeBaseIDs), &kbIDs)
+	}
+	if kbIDs == nil {
+		kbIDs = []int64{}
+	}
 	return &AgentResponse{
 		ID:                m.ID,
 		Name:              m.Name,
@@ -60,6 +71,7 @@ func NewAgentResponse(m *model.Agent) *AgentResponse {
 		EmbeddingConfigID: m.EmbeddingConfigID,
 		Description:       m.Description,
 		Avatar:            m.Avatar,
+		KnowledgeBaseIDs:  kbIDs,
 		CreatedAt:         m.CreatedAt,
 		UpdatedAt:         m.UpdatedAt,
 	}
@@ -106,6 +118,10 @@ func (req *AgentUpdate) BuildUpdates() map[string]interface{} {
 	}
 	if req.Avatar != nil {
 		updates["avatar"] = *req.Avatar
+	}
+	if req.KnowledgeBaseIDs != nil {
+		data, _ := json.Marshal(*req.KnowledgeBaseIDs)
+		updates["knowledge_base_ids"] = string(data)
 	}
 	return updates
 }

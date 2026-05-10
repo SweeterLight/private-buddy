@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sashabaranov/go-openai"
+	"private-buddy-server/internal/service/llm"
 )
 
 // WriteNotesTool implements an append-only, structured notes system for persisting agent's working memory.
@@ -45,8 +45,8 @@ func NewWriteNotesTool(sessionID int64, workspaceRoot string, notesMaxChars int)
 
 func (w *WriteNotesTool) Name() string { return "write_notes" }
 
-func (w *WriteNotesTool) Schema() openai.FunctionDefinition {
-	return openai.FunctionDefinition{
+func (w *WriteNotesTool) Schema() llm.FunctionDefinition {
+	return llm.FunctionDefinition{
 		Name: "write_notes",
 		Description: "Append a structured entry to your NOTES. " +
 			"This ADDS a new entry, it does NOT overwrite. " +

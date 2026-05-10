@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { logger } from '../logger';
-import type { Session, Message, LLMConfig, EmbeddingConfig, Agent, AgentWithSessions, Interaction, SearchConfig } from '../types';
+import type { Session, Message, LLMConfig, EmbeddingConfig, Agent, AgentWithSessions, Interaction, SearchConfig, KnowledgeBase, Document, SearchResult } from '../types';
 
 declare global {
   interface Window {
@@ -99,10 +99,10 @@ export const sessionApi = {
 
 export const messageApi = {
   list: (sessionId: number) => api.get<Message[]>(`/messages/${sessionId}`),
-  send: (sessionId: number, content: string) => 
-    api.post<{trigger_message_id: number}>(`/chat/send/${sessionId}?message=${encodeURIComponent(content)}`),
+  send: (sessionId: number, content: string) =>
+      api.post<{trigger_message_id: number, ai_message_id: number}>(`/chat/send/${sessionId}?message=${encodeURIComponent(content)}`),
   createAndSend: (content: string, agentId?: number, title?: string) =>
-    api.post<{session_id: number, trigger_message_id: number}>(`/chat/new?message=${encodeURIComponent(content)}${agentId ? `&agent_id=${agentId}` : ''}${title ? `&title=${encodeURIComponent(title)}` : ''}`),
+    api.post<{session_id: number, trigger_message_id: number, ai_message_id: number}>(`/chat/new?message=${encodeURIComponent(content)}${agentId ? `&agent_id=${agentId}` : ''}${title ? `&title=${encodeURIComponent(title)}` : ''}`),
 };
 
 export const llmConfigApi = {
@@ -159,4 +159,27 @@ export const getAvatarUrl = (avatar: string) => {
 
 export const versionApi = {
   get: () => api.get<{ version: string }>('/version'),
+};
+
+export const kbApi = {
+  list: () => api.get<KnowledgeBase[]>('/kb'),
+  get: (id: number) => api.get<KnowledgeBase>(`/kb/${id}`),
+  create: (data: Partial<KnowledgeBase>) => api.post<KnowledgeBase>('/kb', data),
+  update: (id: number, data: Partial<KnowledgeBase>) => api.put<KnowledgeBase>(`/kb/${id}`, data),
+  delete: (id: number) => api.delete(`/kb/${id}`),
+  listDocuments: (kbId: number) => api.get<Document[]>(`/kb/${kbId}/documents`),
+  uploadDocument: (kbId: number, file: File, title?: string) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (title) formData.append('title', title);
+    return api.post<Document>(`/kb/${kbId}/documents`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+  getDocument: (kbId: number, docId: number) => api.get<Document>(`/kb/${kbId}/documents/${docId}`),
+  deleteDocument: (kbId: number, docId: number) => api.delete(`/kb/${kbId}/documents/${docId}`),
+  search: (kbId: number, query: string, topK?: number) =>
+    api.post<SearchResult[]>(`/kb/${kbId}/search`, { query, top_k: topK }),
+  searchMulti: (kbIds: number[], query: string, topK?: number) =>
+    api.post<SearchResult[]>('/kb/search', { kb_ids: kbIds, query, top_k: topK }),
 };
