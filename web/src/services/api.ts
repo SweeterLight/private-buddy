@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { logger } from '../logger';
-import type { Session, Message, LLMConfig, EmbeddingConfig, Agent, AgentWithSessions, Interaction, SearchConfig, KnowledgeBase, Document, SearchResult, SessionAgentStatus } from '../types';
+import type { Session, Message, LLMConfig, EmbeddingConfig, Agent, AgentWithSessions, Interaction, SearchConfig, KnowledgeBase, Document, SearchResult, SessionAgentStatus, UserProfile } from '../types';
 
 declare global {
   interface Window {
@@ -85,6 +85,41 @@ api.interceptors.request.use(async (config) => {
   return config;
 });
 
+// Response envelope matching the backend response package.
+interface ApiEnvelope<T = unknown> {
+  code: number;
+  message: string;
+  data?: T;
+}
+
+const CODE_SUCCESS = 0;
+
+// Response interceptor: unwrap the backend business-code envelope.
+// Frontend code continues to access response.data as the real payload.
+// Business errors (code !== 0) are turned into rejected promises so
+// existing .catch() handlers work as before.
+api.interceptors.response.use(
+  (response) => {
+    const body = response.data as ApiEnvelope;
+    // Non-envelope responses (e.g. SSE streams) pass through unchanged.
+    if (typeof body?.code !== 'number') return response;
+
+    if (body.code === CODE_SUCCESS) {
+      response.data = body.data;
+      return response;
+    }
+
+    // Business error — reject with a structure compatible with
+    // existing error.response.data.detail access patterns.
+    const err = new Error(body.message) as Error & {
+      response?: { data: { detail: string; message: string } };
+    };
+    err.response = { data: { detail: body.message, message: body.message } };
+    return Promise.reject(err);
+  },
+  (error) => Promise.reject(error),
+);
+
 export async function initApiClient(): Promise<number> {
   return resolvePort();
 }
@@ -114,11 +149,8 @@ export const llmConfigApi = {
 };
 
 export const embeddingConfigApi = {
-  list: () => api.get<EmbeddingConfig[]>('/embedding-configs'),
-  get: (id: number) => api.get<EmbeddingConfig>(`/embedding-configs/${id}`),
-  create: (data: Partial<EmbeddingConfig>) => api.post<EmbeddingConfig>('/embedding-configs', data),
-  update: (id: number, data: Partial<EmbeddingConfig>) => api.put<EmbeddingConfig>(`/embedding-configs/${id}`, data),
-  delete: (id: number) => api.delete(`/embedding-configs/${id}`),
+  get: () => api.get<EmbeddingConfig>('/embedding-config'),
+  update: (data: Partial<EmbeddingConfig>) => api.put<EmbeddingConfig>('/embedding-config', data),
 };
 
 export const agentApi = {
@@ -140,6 +172,11 @@ export const interactionApi = {
 export const searchConfigApi = {
   get: () => api.get<SearchConfig>('/search-config'),
   update: (data: Partial<SearchConfig>) => api.put<SearchConfig>('/search-config', data),
+};
+
+export const userProfileApi = {
+  get: () => api.get<UserProfile>('/user-profile'),
+  upsert: (data: { name: string; bio?: string }) => api.put<UserProfile>('/user-profile', data),
 };
 
 export const uploadApi = {

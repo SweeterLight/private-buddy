@@ -2,7 +2,7 @@ import React from 'react';
 import { UserOutlined, RobotOutlined, ApiOutlined, SearchOutlined, GlobalOutlined, DatabaseOutlined } from '@ant-design/icons';
 import { getAvatarUrl } from '../services/api';
 
-export type IconType = 'agent' | 'llm' | 'embedding' | 'search' | 'language' | 'kb';
+export type IconType = 'user' | 'agent' | 'llm' | 'embedding' | 'search' | 'language' | 'kb';
 
 interface ConfigIconProps {
   type: IconType;
@@ -13,6 +13,7 @@ interface ConfigIconProps {
 }
 
 const ICON_MAP: Record<IconType, { icon: React.ReactNode; colorVar: string; bgVar: string }> = {
+  user: { icon: <UserOutlined />, colorVar: 'var(--color-primary)', bgVar: 'var(--color-primary-bg)' },
   agent: { icon: <UserOutlined />, colorVar: 'var(--color-primary)', bgVar: 'var(--color-primary-bg)' },
   llm: { icon: <RobotOutlined />, colorVar: 'var(--color-llm)', bgVar: 'var(--color-llm-bg)' },
   embedding: { icon: <ApiOutlined />, colorVar: 'var(--color-embedding)', bgVar: 'var(--color-embedding-bg)' },

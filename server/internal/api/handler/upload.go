@@ -2,13 +2,13 @@ package handler
 
 import (
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"private-buddy-server/internal/config"
+	"private-buddy-server/internal/api/response"
 
 	"github.com/gin-gonic/gin"
 )
@@ -29,33 +29,29 @@ var allowedAvatarExtensions = map[string]bool{
 func (h *Handler) UploadAvatar(c *gin.Context) {
 	file, err := c.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "No file uploaded"})
+		response.BadRequest(c, "No file uploaded")
 		return
 	}
 
 	if file.Filename == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "No filename provided"})
+		response.BadRequest(c, "No filename provided")
 		return
 	}
 
 	ext := strings.ToLower(filepath.Ext(file.Filename))
 	if !allowedAvatarExtensions[ext] {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"detail": "Invalid file type. Allowed: .jpg, .jpeg, .png, .webp",
-		})
+		response.BadRequest(c, "Invalid file type. Allowed: .jpg, .jpeg, .png, .webp")
 		return
 	}
 
 	if file.Size > maxAvatarFileSize {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"detail": fmt.Sprintf("File too large. Max size: %dMB", maxAvatarFileSize/(1024*1024)),
-		})
+		response.BadRequest(c, fmt.Sprintf("File too large. Max size: %dMB", maxAvatarFileSize/(1024*1024)))
 		return
 	}
 
 	avatarsDir := config.Get().GetAvatarsDir()
 	if err := os.MkdirAll(avatarsDir, 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "Failed to create avatars directory"})
+		response.InternalError(c, "Failed to create avatars directory")
 		return
 	}
 
@@ -63,9 +59,9 @@ func (h *Handler) UploadAvatar(c *gin.Context) {
 	savePath := filepath.Join(avatarsDir, filename)
 
 	if err := c.SaveUploadedFile(file, savePath); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "Failed to save file"})
+		response.InternalError(c, "Failed to save file")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"filename": filename})
+	response.Success(c, gin.H{"filename": filename})
 }

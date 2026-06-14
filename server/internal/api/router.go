@@ -55,18 +55,21 @@ func SetupRouter() *gin.Engine {
 			llmConfigs.DELETE("/:id", h.DeleteLLMConfig)
 		}
 
-		embeddingConfigs := api.Group("/embedding-configs")
+		embeddingConfig := api.Group("/embedding-config")
 		{
-			embeddingConfigs.POST("", h.CreateEmbeddingConfig)
-			embeddingConfigs.GET("", h.ListEmbeddingConfigs)
-			embeddingConfigs.GET("/:id", h.GetEmbeddingConfig)
-			embeddingConfigs.PUT("/:id", h.UpdateEmbeddingConfig)
-			embeddingConfigs.DELETE("/:id", h.DeleteEmbeddingConfig)
+			embeddingConfig.GET("", h.GetEmbeddingConfig)
+			embeddingConfig.PUT("", h.UpdateEmbeddingConfig)
+		}
+
+		userProfile := api.Group("/user-profile")
+		{
+			userProfile.GET("", h.GetUserProfile)
+			userProfile.PUT("", h.CreateOrUpdateUserProfile)
 		}
 
 		agents := api.Group("/agents")
 		{
-			agents.POST("", h.CreateAgent)
+			agents.POST("", middleware.RequireEmbedding, h.CreateAgent)
 			agents.GET("", h.ListAgents)
 			agents.GET("/with-sessions", h.ListAgentsWithSessions)
 			agents.GET("/:id", h.GetAgent)
@@ -76,7 +79,7 @@ func SetupRouter() *gin.Engine {
 
 		sessions := api.Group("/sessions")
 		{
-			sessions.POST("", h.CreateSession)
+			sessions.POST("", middleware.RequireEmbedding, h.CreateSession)
 			sessions.GET("", h.ListSessions)
 			sessions.GET("/:id", h.GetSession)
 			sessions.PUT("/:id", h.UpdateSession)
@@ -91,8 +94,8 @@ func SetupRouter() *gin.Engine {
 
 		chat := api.Group("/chat")
 		{
-			chat.POST("/new", h.CreateAndSend)
-			chat.POST("/send/:session_id", h.SendMessage)
+			chat.POST("/new", middleware.RequireEmbedding, h.CreateAndSend)
+			chat.POST("/send/:session_id", middleware.RequireEmbedding, h.SendMessage)
 			chat.GET("/stream/:session_id", h.StreamMessages)
 			chat.GET("/agents/:session_id", h.GetSessionAgents)
 		}
@@ -113,7 +116,7 @@ func SetupRouter() *gin.Engine {
 
 		kbGroup := api.Group("/kb")
 		{
-			kbGroup.POST("", kbHandler.CreateKnowledgeBase)
+			kbGroup.POST("", middleware.RequireEmbedding, kbHandler.CreateKnowledgeBase)
 			kbGroup.GET("", kbHandler.ListKnowledgeBases)
 			kbGroup.GET("/:id", kbHandler.GetKnowledgeBase)
 			kbGroup.PUT("/:id", kbHandler.UpdateKnowledgeBase)

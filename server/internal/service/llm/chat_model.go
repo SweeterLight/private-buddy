@@ -229,7 +229,7 @@ func (cm *ChatModel) buildRequest(messages []Message) openai.ChatCompletionReque
 // --- Public API methods ---
 
 // Chat sends a non-streaming chat completion request and returns the response content.
-// Used by services that need a single complete response: summary, narrative, user state, etc.
+// Used by services that need a single complete response: summary, narrative, person state, etc.
 func (cm *ChatModel) Chat(ctx context.Context, messages []Message) (string, error) {
 	logMessages(messages)
 
@@ -339,7 +339,7 @@ type JSONSchemaDefinition struct {
 
 // ChatWithJSONSchema sends a chat completion request with JSON Schema response format.
 // Forces the LLM to output valid JSON conforming to the provided schema.
-// Used by services that need structured output: user state inference, query routing, requirement rewriting.
+// Used by services that need structured output: person state inference, query routing, requirement rewriting.
 // This matches Python's pattern of using with_structured_output() for deterministic JSON responses.
 func (cm *ChatModel) ChatWithJSONSchema(ctx context.Context, messages []Message, schemaDef JSONSchemaDefinition) (string, error) {
 	logMessages(messages)

@@ -2,8 +2,8 @@
 //
 // This package provides the context assembly services that build the LLM message
 // sequence from various context sources: summaries, narratives, retrieval results,
-// user state, and task results. It matches Python's chat/context module.
-package chatctx
+// person state, and task results. It matches Python's chat/context module.
+package chatcontext
 
 import (
 	"fmt"
@@ -22,7 +22,7 @@ import (
 //   - Metadata (message numbers) preserved for debugging and context clarity
 //   - User state placed in instruction area (after narrative, before response directive)
 //     to preserve narrative flow while guiding response strategy
-const oneBigMessageTemplate = `%sBackground context from earlier in the conversation (messages 1-%d):
+const oneBigMessageTemplate = `%s%s%sBackground context from earlier in the conversation (messages 1-%d):
 
 %s
 
@@ -34,18 +34,18 @@ Recent conversation (messages %d-%d):
 
 ---
 
-%s%sPlease respond directly to the user. Do not use parenthetical action descriptions or non-verbal content.`
+%s%sRespond to the person you are talking to. Do not use parenthetical action descriptions or non-verbal content.`
 
 // Template for simple context without background story (V < N case).
 // Used when there are not enough messages to generate a summary.
 // Segments section is included when KB-retrieved content is available.
-const oneBigMessageNoStoryTemplate = `%sConversation record (messages %d-%d):
+const oneBigMessageNoStoryTemplate = `%s%s%sConversation record (messages %d-%d):
 
 %s
 
 ---
 
-%s%s%sPlease respond directly to the user. Do not use parenthetical action descriptions or non-verbal content.`
+%s%s%sRespond to the person you are talking to. Do not use parenthetical action descriptions or non-verbal content.`
 
 // TaskResultForAssembly represents the task execution result for context assembly.
 // Mirrors Python's TaskResult DTO used in context assembly.
@@ -64,6 +64,16 @@ func formatCharacterSection(characterSettings string) string {
 		return ""
 	}
 	return fmt.Sprintf("[Your Character]\n%s\n\n---\n\n", characterSettings)
+}
+
+// FormatEntityProfileSection formats an EntityProfile narrative for context injection.
+// The narrative describes the agent's impression of a specific entity (user/agent/session).
+// Returns a natural-language section or empty string if narrative is empty.
+func FormatEntityProfileSection(narrative string, entityName string) string {
+	if narrative == "" {
+		return ""
+	}
+	return fmt.Sprintf("You have formed the following impression about %s:\n\n%s\n\n---\n\n", entityName, narrative)
 }
 
 // formatSegmentsSection formats relevant segments as an independent section.
@@ -87,15 +97,15 @@ func formatSegmentsSection(relevantSegments []Segment) string {
 	return fmt.Sprintf("Some additional details from earlier conversations that may be relevant:\n\n%s\n\n", strings.Join(segmentsText, "\n"))
 }
 
-// formatUserStateInstruction formats user state as natural language instruction.
+// formatPersonStateInstruction formats person state as natural language instruction.
 // Placed in the instruction area (after narrative, before response directive)
 // to preserve narrative flow while guiding response strategy.
 // Returns "{description}\nAdjust your response tone, detail level, and strategy accordingly.\n\n" or empty string.
-func formatUserStateInstruction(userStateDescription string) string {
-	if userStateDescription == "" {
+func formatPersonStateInstruction(personStateDescription string) string {
+	if personStateDescription == "" {
 		return ""
 	}
-	return fmt.Sprintf("%s\nAdjust your response tone, detail level, and strategy accordingly.\n\n", userStateDescription)
+	return fmt.Sprintf("%s\nAdjust your response tone, detail level, and strategy accordingly.\n\n", personStateDescription)
 }
 
 // formatTaskResultSection formats agent delivery section for the prompt.
@@ -130,44 +140,54 @@ func formatTaskResultSection(taskResult *TaskResultForAssembly) string {
 
 // AssembleContext assembles context into one big message for LLM processing.
 //
-// This method combines character settings, background story (cached narrative),
-// relevant segments, and recent messages into a unified message format.
+// This method combines character settings, relevant memories, background story
+// (cached narrative), relevant segments, and recent messages into a unified
+// message format.
 //
 // The background story is a cached narrative generated in background alongside
 // the summary. Segments are RAG-retrieved fragments placed as an independent
 // section with narrative transition, since they could not be fused into the
 // pre-generated narrative.
 //
+// Memories are injected between character settings and background story,
+// providing cross-session context for the agent.
+//
 // Parameters:
 //   - characterSettings: agent's personality, style, and identity settings
+//   - memories: formatted memory context section (may be empty)
 //   - backgroundStory: cached narrative from summary record
 //   - recentMessages: recent completed messages (including trigger_message as the latest)
 //   - relevantSegments: RAG-retrieved historical segments (independent section)
 //   - summaryVersion: version number of the summary (covers messages 1 to summaryVersion)
 //   - recentStart: starting message sequence number for recent messages
 //   - recentEnd: ending message sequence number for recent messages
-//   - userStateDescription: natural language description of inferred user state,
+//   - personStateDescription: natural language description of inferred person state,
 //     placed in instruction area to guide response strategy
 //   - taskResult: agent execution result for world-interaction tasks,
 //     provides execution status and results for LLM to formulate response
 func AssembleContext(
 	characterSettings string,
+	memories string,
+	entityProfiles string,
 	backgroundStory string,
 	recentMessages []model.Message,
 	relevantSegments []Segment,
 	summaryVersion int,
 	recentStart int,
 	recentEnd int,
-	userStateDescription string,
+	personStateDescription string,
 	taskResult *TaskResultForAssembly,
+	userName string,
 ) []llm.Message {
 	characterSection := formatCharacterSection(characterSettings)
-	userStateInstruction := formatUserStateInstruction(userStateDescription)
+	personStateInstruction := formatPersonStateInstruction(personStateDescription)
 	taskResultSection := formatTaskResultSection(taskResult)
+
+	userRole := userName
 
 	var dialogLines []string
 	for _, msg := range recentMessages {
-		role := "User"
+		role := userRole
 		if msg.Role != model.MessageRoleUser {
 			role = "You"
 		}
@@ -180,6 +200,8 @@ func AssembleContext(
 	if backgroundStory != "" && summaryVersion != -1 {
 		oneBigMessage = fmt.Sprintf(oneBigMessageTemplate,
 			characterSection,
+			memories,
+			entityProfiles,
 			summaryVersion,
 			backgroundStory,
 			segmentsSection,
@@ -187,17 +209,19 @@ func AssembleContext(
 			recentEnd,
 			dialogSection,
 			taskResultSection,
-			userStateInstruction,
+			personStateInstruction,
 		)
 	} else {
 		oneBigMessage = fmt.Sprintf(oneBigMessageNoStoryTemplate,
 			characterSection,
+			memories,
+			entityProfiles,
 			recentStart,
 			recentEnd,
 			dialogSection,
 			segmentsSection,
 			taskResultSection,
-			userStateInstruction,
+			personStateInstruction,
 		)
 	}
 
@@ -207,7 +231,7 @@ func AssembleContext(
 
 	applogger.L.Info("Assembled context",
 		"message_count", len(messages),
-		"has_user_state", userStateDescription != "",
+		"has_person_state", personStateDescription != "",
 		"has_task_result", taskResult != nil,
 		"segments", len(relevantSegments),
 	)

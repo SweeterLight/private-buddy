@@ -20,6 +20,7 @@ import (
 	applogger "private-buddy-server/internal/logger"
 	"private-buddy-server/internal/model"
 	"private-buddy-server/internal/schema"
+	"private-buddy-server/internal/service"
 	"private-buddy-server/internal/service/llm"
 
 	_ "github.com/glebarez/go-sqlite/compat"
@@ -56,20 +57,20 @@ func RecoverProcessingDocuments() {
 	}
 
 	var switchingKBs []model.KnowledgeBase
-	database.DB.Where("index_type = ?", model.KnowledgeBaseIndexTypeSwitching).Find(&switchingKBs)
+	if err := database.DB.Where("index_type = ?", model.KnowledgeBaseIndexTypeSwitching).Find(&switchingKBs).Error; err != nil {
+		applogger.L.Warn("failed to load switching KBs for recovery", "error", err)
+		return
+	}
 	for _, kb := range switchingKBs {
 		applogger.L.Info("Recovering switching KB, resetting to flat", "kb_id", kb.ID)
-		database.DB.Model(&kb).Update("index_type", model.KnowledgeBaseIndexTypeFlat)
+		if err := database.DB.Model(&kb).Update("index_type", model.KnowledgeBaseIndexTypeFlat).Error; err != nil {
+			applogger.L.Error("failed to reset KB index type to flat", "kb_id", kb.ID, "error", err)
+		}
 	}
 }
 
 // CreateKnowledgeBase creates a new knowledge base with its storage directories.
 func CreateKnowledgeBase(kb *model.KnowledgeBase) error {
-	var embConfig model.EmbeddingConfig
-	if err := database.DB.First(&embConfig, kb.EmbeddingConfigID).Error; err != nil {
-		return fmt.Errorf("embedding config not found: %w", err)
-	}
-
 	if err := database.DB.Create(kb).Error; err != nil {
 		return fmt.Errorf("failed to create knowledge base: %w", err)
 	}
@@ -99,7 +100,9 @@ func CreateKnowledgeBase(kb *model.KnowledgeBase) error {
 // DeleteKnowledgeBase deletes a knowledge base and all its data.
 func DeleteKnowledgeBase(kbID int64) error {
 	var agents []model.Agent
-	database.DB.Find(&agents)
+	if err := database.DB.Find(&agents).Error; err != nil {
+		return fmt.Errorf("failed to load agents for KB cleanup: %w", err)
+	}
 	for _, a := range agents {
 		var ids []int64
 		if err := jsonUnmarshal(a.KnowledgeBaseIDs, &ids); err != nil {
@@ -108,7 +111,9 @@ func DeleteKnowledgeBase(kbID int64) error {
 		for i, id := range ids {
 			if id == kbID {
 				ids = append(ids[:i], ids[i+1:]...)
-				database.DB.Model(&a).Update("knowledge_base_ids", jsonMarshal(ids))
+				if err := database.DB.Model(&a).Update("knowledge_base_ids", jsonMarshal(ids)).Error; err != nil {
+					applogger.L.Error("failed to update agent KB IDs after KB deletion", "agent_id", a.ID, "error", err)
+				}
 				break
 			}
 		}
@@ -119,9 +124,15 @@ func DeleteKnowledgeBase(kbID int64) error {
 	kbDir := filepath.Join(config.Get().GetKBDir(), fmt.Sprintf("%d", kbID))
 	os.RemoveAll(kbDir)
 
-	database.DB.Where("knowledge_base_id = ?", kbID).Delete(&model.DocumentChunk{})
-	database.DB.Where("knowledge_base_id = ?", kbID).Delete(&model.Document{})
-	database.DB.Delete(&model.KnowledgeBase{}, kbID)
+	if err := database.DB.Where("knowledge_base_id = ?", kbID).Delete(&model.DocumentChunk{}).Error; err != nil {
+		applogger.L.Error("failed to delete document chunks for KB", "kb_id", kbID, "error", err)
+	}
+	if err := database.DB.Where("knowledge_base_id = ?", kbID).Delete(&model.Document{}).Error; err != nil {
+		applogger.L.Error("failed to delete documents for KB", "kb_id", kbID, "error", err)
+	}
+	if err := database.DB.Delete(&model.KnowledgeBase{}, kbID).Error; err != nil {
+		return fmt.Errorf("failed to delete knowledge base: %w", err)
+	}
 
 	return nil
 }
@@ -219,12 +230,14 @@ func processDocument(ctx context.Context, kbID, docID int64) {
 		return
 	}
 
-	var embConfig model.EmbeddingConfig
-	if err := database.DB.First(&embConfig, kb.EmbeddingConfigID).Error; err != nil {
-		database.DB.Model(&model.Document{}).Where("id = ?", docID).Updates(map[string]interface{}{
+	embConfig := service.GetEmbeddingConfig()
+	if embConfig == nil {
+		if err := database.DB.Model(&model.Document{}).Where("id = ?", docID).Updates(map[string]interface{}{
 			"status":        model.DocumentStatusFailed,
 			"error_message": "Embedding config not found",
-		})
+		}).Error; err != nil {
+			applogger.L.Error("failed to mark document as failed", "doc_id", docID, "error", err)
+		}
 		return
 	}
 
@@ -249,7 +262,10 @@ func addVectorsToIndex(kbID, docID int64) {
 	}
 
 	var chunkIDs []int64
-	database.DB.Model(&model.DocumentChunk{}).Where("document_id = ?", docID).Pluck("id", &chunkIDs)
+	if err := database.DB.Model(&model.DocumentChunk{}).Where("document_id = ?", docID).Pluck("id", &chunkIDs).Error; err != nil {
+		applogger.L.Error("failed to pluck chunk IDs for index update", "doc_id", docID, "error", err)
+		return
+	}
 
 	for _, chunkID := range chunkIDs {
 		embedding, err := mgr.GetVector(chunkID)

@@ -121,6 +121,16 @@ func Start(
 
 	globalRuntimeManager = newRuntimeManager(onStatusChange)
 
+	// Reset any stale working statuses left from a previous crash.
+	// Each agent's recoverActiveWorks handles the normal case (work record + status),
+	// but this global sweep covers the edge case where setStatus(working) was called
+	// and a crash occurred before the work record was persisted.
+	if err := database.DB.Model(&model.ParticipantSession{}).
+		Where("participant_type = ? AND status = ?", model.ParticipantTypeAgent, model.ParticipantStatusWorking).
+		Update("status", model.ParticipantStatusIdle).Error; err != nil {
+		applogger.L.Error("Failed to reset stale participant statuses on startup", "error", err)
+	}
+
 	// Eagerly start runtimes for all agents
 	var agents []model.Agent
 	if err := database.DB.Find(&agents).Error; err != nil {

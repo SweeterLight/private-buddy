@@ -11,7 +11,6 @@ type AgentBase struct {
 	Name              string  `json:"name" binding:"required"`
 	CharacterSettings string  `json:"character_settings"`
 	LLMConfigID       int64   `json:"llm_config_id" binding:"required"`
-	EmbeddingConfigID int64   `json:"embedding_config_id"`
 	Description       string  `json:"description"`
 	Avatar            string  `json:"avatar"`
 	KnowledgeBaseIDs  []int64 `json:"knowledge_base_ids"`
@@ -19,11 +18,10 @@ type AgentBase struct {
 
 type AgentCreate AgentBase
 
+// AgentUpdate allows updating mutable agent fields. Name is immutable.
 type AgentUpdate struct {
-	Name              *string  `json:"name"`
 	CharacterSettings *string  `json:"character_settings"`
 	LLMConfigID       *int64   `json:"llm_config_id"`
-	EmbeddingConfigID *int64   `json:"embedding_config_id"`
 	Description       *string  `json:"description"`
 	Avatar            *string  `json:"avatar"`
 	KnowledgeBaseIDs  *[]int64 `json:"knowledge_base_ids"`
@@ -34,7 +32,6 @@ type AgentResponse struct {
 	Name              string    `json:"name"`
 	CharacterSettings string    `json:"character_settings"`
 	LLMConfigID       int64     `json:"llm_config_id"`
-	EmbeddingConfigID int64     `json:"embedding_config_id"`
 	Description       string    `json:"description"`
 	Avatar            string    `json:"avatar"`
 	KnowledgeBaseIDs  []int64   `json:"knowledge_base_ids"`
@@ -67,7 +64,6 @@ func NewAgentResponse(m *model.Agent) *AgentResponse {
 		Name:              m.Name,
 		CharacterSettings: m.CharacterSettings,
 		LLMConfigID:       m.LLMConfigID,
-		EmbeddingConfigID: m.EmbeddingConfigID,
 		Description:       m.Description,
 		Avatar:            m.Avatar,
 		KnowledgeBaseIDs:  kbIDs,
@@ -99,17 +95,11 @@ func NewSessionBriefList(entities []model.Session) []SessionBrief {
 
 func (req *AgentUpdate) BuildUpdates() map[string]interface{} {
 	updates := make(map[string]interface{})
-	if req.Name != nil {
-		updates["name"] = *req.Name
-	}
 	if req.CharacterSettings != nil {
 		updates["character_settings"] = *req.CharacterSettings
 	}
 	if req.LLMConfigID != nil {
 		updates["llm_config_id"] = *req.LLMConfigID
-	}
-	if req.EmbeddingConfigID != nil {
-		updates["embedding_config_id"] = *req.EmbeddingConfigID
 	}
 	if req.Description != nil {
 		updates["description"] = *req.Description

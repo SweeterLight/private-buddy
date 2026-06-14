@@ -58,7 +58,7 @@
     "confirmDeleteTitle": "确认删除"
   },
   "llmConfig": {
-    "title": "LLM",
+    "title": "大语言模型",
     "create": "新建LLM配置",
     "edit": "编辑LLM配置",
     "name": "名称",
@@ -82,7 +82,7 @@
     "confirmDeleteTitle": "确认删除"
   },
   "embeddingConfig": {
-    "title": "Embedding",
+    "title": "向量化模型",
     "create": "新建Embedding配置",
     "edit": "编辑Embedding配置",
     "name": "名称",
@@ -100,6 +100,9 @@
     "createFailed": "创建Embedding配置失败",
     "updateSuccess": "更新Embedding配置成功",
     "updateFailed": "更新Embedding配置失败",
+    "saveSuccess": "保存Embedding配置成功",
+    "saveError": "保存Embedding配置失败",
+    "loadError": "加载Embedding配置失败",
     "deleteSuccess": "删除成功",
     "deleteFailed": "删除失败",
     "confirmDelete": "确定要删除这个配置吗？",
@@ -107,9 +110,10 @@
   },
   "settings": {
     "title": "设置",
-    "llmConfig": "LLM",
-    "embeddingConfig": "Embedding",
-    "agentConfig": "Agent",
+    "userProfile": "我的信息",
+    "llmConfig": "大语言模型",
+    "embeddingConfig": "向量化模型",
+    "agentConfig": "智能体",
     "kbConfig": "知识库",
     "searchConfig": "搜索引擎",
     "language": "语言"
@@ -128,6 +132,7 @@
     "saveError": "保存失败"
   },
   "common": {
+    "back": "返回",
     "save": "保存",
     "cancel": "取消",
     "create": "创建",
@@ -140,6 +145,25 @@
     "success": "成功",
     "failed": "失败",
     "error": "错误"
+  },
+  "userProfile": {
+    "title": "我的信息",
+    "name": "名字",
+    "namePlaceholder": "请输入您的名字",
+    "bio": "自述",
+    "bioPlaceholder": "一句话介绍自己，帮助 Agent 更好地了解你",
+    "loadError": "加载失败",
+    "saveSuccess": "保存成功",
+    "saveError": "保存失败",
+    "nameImmutable": "名字一旦确定就不能改了哦",
+    "welcome_1": "你好呀，初次见面。",
+    "welcome_2": "在开始之前，先告诉我该怎么称呼你吧。",
+    "welcome_nameHint": "名字一旦确定就不能改了哦",
+    "welcome_next": "下一步",
+    "welcome_step2_1": "很高兴认识你",
+    "welcome_step2_2": "愿意介绍一下自己吗？这样大家会更懂你。",
+    "welcome_skip": "以后再说，快带我进去吧",
+    "welcome_start": "开始吧"
   },
   "messages": {
     "sendFailed": "发送消息失败",
@@ -187,5 +211,11 @@
     "confirmDeleteDoc": "确定要删除这个文档吗？",
     "deleteDocSuccess": "文档删除成功",
     "deleteDocFailed": "文档删除失败"
+  },
+  "embeddingRequired": {
+    "title": "还差一步",
+    "message_1": "Agent 和知识库的运行需要向量化模型来处理和理解信息。",
+    "message_2": "请先在设置中配置好向量化模型，然后再来。",
+    "goSettings": "前往设置"
   }
 }

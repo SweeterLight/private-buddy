@@ -6,33 +6,31 @@ import (
 	"sync"
 
 	"private-buddy-server/internal/database"
+	applogger "private-buddy-server/internal/logger"
 	"private-buddy-server/internal/model"
 	"private-buddy-server/internal/schema"
+	"private-buddy-server/internal/service"
 	"private-buddy-server/internal/service/llm"
 )
 
-// getEmbeddingService creates an EmbeddingService for the given knowledge base.
-func getEmbeddingService(kbID int64) (*llm.EmbeddingService, error) {
-	var kb model.KnowledgeBase
-	if err := database.DB.First(&kb, kbID).Error; err != nil {
-		return nil, fmt.Errorf("knowledge base not found: %w", err)
+// getEmbeddingService creates an EmbeddingService from the global config.
+func getEmbeddingService() (*llm.EmbeddingService, error) {
+	config := service.GetEmbeddingConfig()
+	if config == nil {
+		return nil, fmt.Errorf("no global embedding config")
 	}
+	return llm.NewEmbeddingService(config.BaseURL, config.APIKey, config.ModelID, embeddingDim), nil
+}
 
-	var embConfig model.EmbeddingConfig
-	if err := database.DB.First(&embConfig, kb.EmbeddingConfigID).Error; err != nil {
-		return nil, fmt.Errorf("embedding config not found: %w", err)
-	}
-
-	return llm.NewEmbeddingService(embConfig.BaseURL, embConfig.APIKey, embConfig.ModelID, embeddingDim), nil
+// getEmbeddingServiceForKB creates an EmbeddingService instance for a knowledge base.
+// Deprecated: use getEmbeddingService() instead.
+func getEmbeddingServiceForKB(kbID int64) (*llm.EmbeddingService, error) {
+	return getEmbeddingService()
 }
 
 // searchKB searches a single knowledge base for relevant chunks.
 func searchKB(ctx context.Context, kbID int64, query string, topK int) ([]schema.SearchResult, error) {
-	if topK <= 0 {
-		topK = 5
-	}
-
-	embService, err := getEmbeddingService(kbID)
+	embService, err := getEmbeddingService()
 	if err != nil {
 		return nil, err
 	}
@@ -53,9 +51,11 @@ func searchKB(ctx context.Context, kbID int64, query string, topK int) ([]schema
 	}
 
 	var deletedChunkIDs []int64
-	database.DB.Model(&model.DocumentChunk{}).
+	if err := database.DB.Model(&model.DocumentChunk{}).
 		Where("knowledge_base_id = ? AND deleted = 1", kbID).
-		Pluck("id", &deletedChunkIDs)
+		Pluck("id", &deletedChunkIDs).Error; err != nil {
+		applogger.L.Warn("search: failed to load deleted chunk IDs, results may include deleted chunks", "kb_id", kbID, "error", err)
+	}
 
 	tracker := newDeletedVectorTracker()
 	tracker.LoadDeletedChunkIDs(deletedChunkIDs)
@@ -72,6 +72,11 @@ func searchMultiKB(ctx context.Context, kbIDs []int64, query string, topK int) (
 		topK = 5
 	}
 
+	embService, err := getEmbeddingService()
+	if err != nil {
+		return nil, err
+	}
+
 	type kbResult struct {
 		results []schema.SearchResult
 		err     error
@@ -85,12 +90,6 @@ func searchMultiKB(ctx context.Context, kbIDs []int64, query string, topK int) (
 		wg.Add(1)
 		go func(id int64) {
 			defer wg.Done()
-
-			embService, err := getEmbeddingService(id)
-			if err != nil {
-				ch <- kbResult{err: err, kbID: id}
-				return
-			}
 
 			queryVec, err := embService.EmbedSingle(ctx, query)
 			if err != nil {
@@ -111,9 +110,11 @@ func searchMultiKB(ctx context.Context, kbIDs []int64, query string, topK int) (
 			}
 
 			var deletedChunkIDs []int64
-			database.DB.Model(&model.DocumentChunk{}).
+			if err := database.DB.Model(&model.DocumentChunk{}).
 				Where("knowledge_base_id = ? AND deleted = 1", id).
-				Pluck("id", &deletedChunkIDs)
+				Pluck("id", &deletedChunkIDs).Error; err != nil {
+				applogger.L.Warn("multiSearch: failed to load deleted chunk IDs", "kb_id", id, "error", err)
+			}
 
 			tracker := newDeletedVectorTracker()
 			tracker.LoadDeletedChunkIDs(deletedChunkIDs)

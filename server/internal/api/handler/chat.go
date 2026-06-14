@@ -19,16 +19,18 @@ package handler
 import (
 	"encoding/json"
 	"io"
-	"net/http"
 	"strconv"
 	"time"
 
 	"private-buddy-server/internal/database"
 	"private-buddy-server/internal/model"
-	"private-buddy-server/internal/service/chat/chatctx"
+	"private-buddy-server/internal/service/chat/chatcontext"
 	"private-buddy-server/internal/service/eventqueue"
+	"private-buddy-server/internal/service/memory"
 
 	applogger "private-buddy-server/internal/logger"
+
+	"private-buddy-server/internal/api/response"
 
 	"github.com/gin-gonic/gin"
 )
@@ -110,7 +112,7 @@ func PushSSEToSession(sessionID int64, data string) {
 func (h *Handler) CreateAndSend(c *gin.Context) {
 	message := c.Query("message")
 	if message == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "message is required"})
+		response.BadRequest(c, "message is required")
 		return
 	}
 
@@ -123,7 +125,7 @@ func (h *Handler) CreateAndSend(c *gin.Context) {
 	if agentID == 0 {
 		var defaultAgent model.Agent
 		if err := database.DB.First(&defaultAgent).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"detail": "No default agent found"})
+			response.InternalError(c, "No default agent found")
 			return
 		}
 		agentID = defaultAgent.ID
@@ -144,25 +146,29 @@ func (h *Handler) CreateAndSend(c *gin.Context) {
 		AgentID: agentID,
 	}
 	if err := database.DB.Create(&session).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
 
 	// Create participant_sessions records for user and agent
-	database.DB.Create(&model.ParticipantSession{
+	if err := database.DB.Create(&model.ParticipantSession{
 		SessionID:       session.ID,
 		ParticipantType: model.ParticipantTypeUser,
 		ParticipantID:   1, // TODO: replace with actual user ID from auth context
 		Role:            model.ParticipantRoleOwner,
 		Status:          model.ParticipantStatusIdle,
-	})
-	database.DB.Create(&model.ParticipantSession{
+	}).Error; err != nil {
+		applogger.L.Error("failed to create user participant for session", "session_id", session.ID, "error", err)
+	}
+	if err := database.DB.Create(&model.ParticipantSession{
 		SessionID:       session.ID,
 		ParticipantType: model.ParticipantTypeAgent,
 		ParticipantID:   agentID,
 		Role:            model.ParticipantRoleMember,
 		Status:          model.ParticipantStatusIdle,
-	})
+	}).Error; err != nil {
+		applogger.L.Error("failed to create agent participant for session", "session_id", session.ID, "error", err)
+	}
 
 	userMsg := model.Message{
 		SessionID:       session.ID,
@@ -172,23 +178,32 @@ func (h *Handler) CreateAndSend(c *gin.Context) {
 		HasInteractions: model.HasInteractionsNone,
 	}
 	if err := database.DB.Select("SessionID", "Role", "Content", "Status", "HasInteractions").Create(&userMsg).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
 
+	// Submit to the event vectorization service for embedding + observation.
+	memory.SubmitVectorization(memory.VectorizationTask{
+		MessageID: userMsg.ID,
+		SessionID: userMsg.SessionID,
+		Content:   userMsg.Content,
+	})
+
 	// Update user's last_read_message_id — user has seen all messages up to this point
-	database.DB.Model(&model.ParticipantSession{}).
+	if err := database.DB.Model(&model.ParticipantSession{}).
 		Where("session_id = ? AND participant_type = ? AND participant_id = ?",
 			session.ID, model.ParticipantTypeUser, 1).
-		Update("last_read_message_id", userMsg.ID)
+		Update("last_read_message_id", userMsg.ID).Error; err != nil {
+		applogger.L.Warn("failed to update last_read_message_id on session create", "session_id", session.ID, "error", err)
+	}
 
 	// Trigger summary generation if needed (sender-agnostic, based on message count)
-	chatctx.MaybeTriggerSummary(c.Request.Context(), session.ID, agentID)
+	chatcontext.MaybeTriggerSummary(c.Request.Context(), session.ID, agentID)
 
 	// Send event to Agent Runtime instead of creating placeholder AI message
 	h.sendEventToRuntime(agentID, session.ID, userMsg.ID, message)
 
-	c.JSON(http.StatusOK, gin.H{
+	response.Success(c, gin.H{
 		"session_id":         session.ID,
 		"trigger_message_id": userMsg.ID,
 	})
@@ -211,13 +226,13 @@ func (h *Handler) SendMessage(c *gin.Context) {
 
 	var session model.Session
 	if err := database.DB.First(&session, sessionID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "Session not found"})
+		response.NotFound(c, "Session not found")
 		return
 	}
 
 	message := c.Query("message")
 	if message == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "message is required"})
+		response.BadRequest(c, "message is required")
 		return
 	}
 
@@ -229,23 +244,32 @@ func (h *Handler) SendMessage(c *gin.Context) {
 		HasInteractions: model.HasInteractionsNone,
 	}
 	if err := database.DB.Select("SessionID", "Role", "Content", "Status", "HasInteractions").Create(&userMsg).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
 
+	// Submit to the event vectorization service for embedding + observation.
+	memory.SubmitVectorization(memory.VectorizationTask{
+		MessageID: userMsg.ID,
+		SessionID: userMsg.SessionID,
+		Content:   userMsg.Content,
+	})
+
 	// Update user's last_read_message_id — user has seen all messages up to this point
-	database.DB.Model(&model.ParticipantSession{}).
+	if err := database.DB.Model(&model.ParticipantSession{}).
 		Where("session_id = ? AND participant_type = ? AND participant_id = ?",
 			sessionID, model.ParticipantTypeUser, 1).
-		Update("last_read_message_id", userMsg.ID)
+		Update("last_read_message_id", userMsg.ID).Error; err != nil {
+		applogger.L.Warn("failed to update last_read_message_id on continue", "session_id", sessionID, "error", err)
+	}
 
 	// Trigger summary generation if needed (sender-agnostic, based on message count)
-	chatctx.MaybeTriggerSummary(c.Request.Context(), sessionID, session.AgentID)
+	chatcontext.MaybeTriggerSummary(c.Request.Context(), sessionID, session.AgentID)
 
 	// Send event to Agent Runtime instead of creating placeholder AI message
 	h.sendEventToRuntime(session.AgentID, sessionID, userMsg.ID, message)
 
-	c.JSON(http.StatusOK, gin.H{
+	response.Success(c, gin.H{
 		"trigger_message_id": userMsg.ID,
 	})
 }
@@ -332,7 +356,7 @@ func (h *Handler) GetSessionAgents(c *gin.Context) {
 	sessionIDStr := c.Param("session_id")
 	sessionID, err := strconv.ParseInt(sessionIDStr, 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "invalid session_id"})
+		response.BadRequest(c, "invalid session_id")
 		return
 	}
 
@@ -341,7 +365,7 @@ func (h *Handler) GetSessionAgents(c *gin.Context) {
 	if err := database.DB.Where("session_id = ? AND participant_type = ?",
 		sessionID, model.ParticipantTypeAgent).
 		Find(&participants).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": "failed to query participants"})
+		response.InternalError(c, "failed to query participants")
 		return
 	}
 
@@ -360,5 +384,5 @@ func (h *Handler) GetSessionAgents(c *gin.Context) {
 		})
 	}
 
-	c.JSON(http.StatusOK, result)
+	response.Success(c, result)
 }

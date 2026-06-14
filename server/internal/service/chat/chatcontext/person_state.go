@@ -1,7 +1,7 @@
-package chatctx
+package chatcontext
 
 import (
-	stdctx "context"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -14,22 +14,22 @@ import (
 	applogger "private-buddy-server/internal/logger"
 )
 
-// userStateInferencePrompt is the LLM prompt template for user state inference.
+// personStateInferencePrompt is the LLM prompt template for inferring the current state of the person you are talking to.
 // It takes one parameter: recent_messages (formatted dialog text).
-const userStateInferencePrompt = `Based on the following recent conversation, infer the user's current state.
+const personStateInferencePrompt = `Based on the following recent conversation, infer the current state of the person you are talking to.
 
 Recent conversation:
 %s
 
-Analyze the user's emotional tone, conversational purpose, and any clues about their physical situation.
+Analyze their emotional tone, conversational purpose, and any clues about their physical situation.
 
-Also determine if the user's request requires interaction with the external world:
+Also determine if their request requires interaction with the external world:
 - Set needs_world_interaction=true if the request needs: real-time information (news, weather, stock prices), 
   file operations (create, modify, delete files), code execution, web searches, or any tool usage.
 - Set needs_world_interaction=false if the LLM can answer directly from its training data 
   (general knowledge, advice, explanations, casual conversation).`
 
-// UserState represents the inferred user state from conversation context.
+// PersonState represents the inferred person state from conversation context.
 //
 // Three-dimensional model:
 //   - Emotion: user's current emotional state (affects response tone)
@@ -41,7 +41,7 @@ Also determine if the user's request requires interaction with the external worl
 // Field descriptions serve dual purpose:
 //  1. Guide LLM structured output generation
 //  2. Provide natural language fragments for prompt template assembly
-type UserState struct {
+type PersonState struct {
 	Emotion               string `json:"emotion"`
 	Purpose               string `json:"purpose"`
 	Situation             string `json:"situation"`
@@ -66,26 +66,29 @@ var purposeDescriptions = map[string]string{
 	"casual_chat":       "engaging in casual conversation",
 }
 
-// ToNaturalLanguage converts the structured user state into a natural language description
+// ToNaturalLanguage converts the structured person state into a natural language description
 // suitable for injection into the prompt's instruction area.
-func (us *UserState) ToNaturalLanguage() string {
-	emotionDesc := us.Emotion
-	if desc, ok := emotionDescriptions[us.Emotion]; ok {
+// personName is the actual name of the person (empty = no profile set).
+func (ps *PersonState) ToNaturalLanguage(personName string) string {
+	emotionDesc := ps.Emotion
+	if desc, ok := emotionDescriptions[ps.Emotion]; ok {
 		emotionDesc = desc
 	}
-	purposeDesc := us.Purpose
-	if desc, ok := purposeDescriptions[us.Purpose]; ok {
+	purposeDesc := ps.Purpose
+	if desc, ok := purposeDescriptions[ps.Purpose]; ok {
 		purposeDesc = desc
 	}
 
+	subject := personName
+
 	parts := []string{
-		fmt.Sprintf("The user appears %s", emotionDesc),
+		fmt.Sprintf("%s appears %s", subject, emotionDesc),
 		fmt.Sprintf("is %s", purposeDesc),
 	}
-	if us.Situation != "" && us.Situation != "unknown" {
-		parts = append(parts, fmt.Sprintf("and is likely %s", us.Situation))
+	if ps.Situation != "" && ps.Situation != "unknown" {
+		parts = append(parts, fmt.Sprintf("and is likely %s", ps.Situation))
 	}
-	if us.NeedsWorldInteraction {
+	if ps.NeedsWorldInteraction {
 		parts = append(parts, "and needs to interact with the external world (tools, real-time data, or file operations)")
 	}
 
@@ -93,40 +96,45 @@ func (us *UserState) ToNaturalLanguage() string {
 }
 
 // formatRecentMessages formats recent messages into text for the inference prompt.
-func formatRecentMessages(recentMessages []model.Message) string {
+// userName is the actual name of the other party, agentName is the agent's own name.
+func formatRecentMessages(recentMessages []model.Message, userName, agentName string) string {
+	userRole := userName
 	var lines []string
 	for _, msg := range recentMessages {
-		role := "User"
+		role := userRole
 		if msg.Role != model.MessageRoleUser {
-			role = "Assistant"
+			role = agentName
 		}
 		lines = append(lines, fmt.Sprintf("%s: %s", role, msg.Content))
 	}
 	return strings.Join(lines, "\n")
 }
 
-// InferUserState infers the user's current state from recent conversation messages.
+// InferPersonState infers the user's current state from recent conversation messages.
 // Uses TemperatureDeterministic for consistent, deterministic outputs.
-// Returns nil if inference fails, allowing the chat flow to continue without user state.
-func InferUserState(
-	ctx stdctx.Context,
+// userName is the actual name of the person being talked to, agentName is the agent's own name.
+// Returns nil if inference fails, allowing the chat flow to continue without person state.
+func InferPersonState(
+	ctx context.Context,
 	llmConfig *model.LLMConfig,
 	recentMessages []model.Message,
-) *UserState {
+	userName string,
+	agentName string,
+) *PersonState {
 	if len(recentMessages) == 0 {
 		return nil
 	}
 
 	chatModel := llm.NewChatModelWithTemperature(llmConfig.BaseURL, llmConfig.APIKey, llmConfig.ModelID, llm.TemperatureDeterministic)
 
-	dialogText := formatRecentMessages(recentMessages)
-	prompt := fmt.Sprintf(userStateInferencePrompt, dialogText)
+	dialogText := formatRecentMessages(recentMessages, userName, agentName)
+	prompt := fmt.Sprintf(personStateInferencePrompt, dialogText)
 
 	result, err := chatModel.ChatWithJSONSchema(ctx, []llm.Message{
 		{Role: "user", Content: prompt},
 	}, llm.JSONSchemaDefinition{
-		Name:        "UserState",
-		Description: "Infer the user's current state from conversation context",
+		Name:        "PersonState",
+		Description: "Infer the person's current state from conversation context",
 		Strict:      true,
 		Schema: jsonschema.Definition{
 			Type: jsonschema.Object,
@@ -134,7 +142,7 @@ func InferUserState(
 				"emotion": {
 					Type: jsonschema.String,
 					Enum: []string{"calm", "anxious", "frustrated", "urgent", "curious"},
-					Description: "The user's current emotional state: " +
+					Description: "The person's current emotional state: " +
 						"'calm' for relaxed or neutral, " +
 						"'anxious' for worried or uneasy, " +
 						"'frustrated' for annoyed or impatient (e.g. repeated failed attempts), " +
@@ -144,7 +152,7 @@ func InferUserState(
 				"purpose": {
 					Type: jsonschema.String,
 					Enum: []string{"seek_help", "seek_advice", "seek_confirmation", "express_feeling", "casual_chat"},
-					Description: "The user's current conversational goal: " +
+					Description: "The person's current conversational goal: " +
 						"'seek_help' for needing a solution or fix, " +
 						"'seek_advice' for wanting recommendations or guidance, " +
 						"'seek_confirmation' for validating a decision or understanding, " +
@@ -153,11 +161,11 @@ func InferUserState(
 				},
 				"situation": {
 					Type:        jsonschema.String,
-					Description: "Brief natural language description of the user's physical context if inferable from the conversation, such as time of day, device, environment, or activity. Use 'unknown' if not inferable. Examples: 'at work on desktop', 'late evening on mobile', 'in a meeting', 'commuting'",
+					Description: "Brief natural language description of the person's physical context if inferable from the conversation, such as time of day, device, environment, or activity. Use 'unknown' if not inferable. Examples: 'at work on desktop', 'late evening on mobile', 'in a meeting', 'commuting'",
 				},
 				"needs_world_interaction": {
 					Type:        jsonschema.Boolean,
-					Description: "Whether the user's request requires interaction with the external world: true if the request needs tools, real-time information, file operations, or any action beyond the LLM's parametric knowledge; false if the LLM can answer directly from its training data",
+					Description: "Whether the person's request requires interaction with the external world: true if the request needs tools, real-time information, file operations, or any action beyond the LLM's parametric knowledge; false if the LLM can answer directly from its training data",
 				},
 			},
 			Required: []string{"emotion", "purpose", "situation", "needs_world_interaction"},
@@ -165,14 +173,14 @@ func InferUserState(
 	})
 
 	if err != nil {
-		applogger.L.Error("Failed to infer user state", "error", err)
+		applogger.L.Error("Failed to infer person state", "error", err)
 		return nil
 	}
 
 	if result != "" {
-		var state UserState
+		var state PersonState
 		if err := json.Unmarshal([]byte(result), &state); err == nil {
-			applogger.L.Info("Inferred user state",
+			applogger.L.Info("Inferred person state",
 				"emotion", state.Emotion,
 				"purpose", state.Purpose,
 				"situation", state.Situation,

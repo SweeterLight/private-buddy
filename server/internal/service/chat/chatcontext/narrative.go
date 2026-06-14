@@ -1,7 +1,7 @@
-package chatctx
+package chatcontext
 
 import (
-	stdctx "context"
+	"context"
 	"fmt"
 
 	"private-buddy-server/internal/model"
@@ -12,13 +12,13 @@ import (
 
 // cachedNarrativePrompt generates a narrative from summary content only.
 // Used for cached narrative generation after summary creation.
-const cachedNarrativePrompt = `You are a conversation background narrative assistant. Generate a coherent background narrative based on the summary.
+const cachedNarrativePrompt = `Generate a coherent background narrative based on the summary.
 
 Summary:
 %s
 
 Requirements:
-1. Use second-person perspective (address the agent as "You"). For example: "You have been discussing X with the user. The user mentioned..."
+1. Use second-person perspective (address the agent as "You"). For example: "You have been discussing X. They mentioned..."
 2. Preserve ALL key information from the summary
 3. Transform the summary into a flowing narrative
 4. Do NOT add interpretations, judgments, or assumptions
@@ -34,14 +34,14 @@ Output only the narrative content.`
 
 // narrativePrompt generates a narrative from summary + RAG segments.
 // Used for legacy real-time narrative generation.
-const narrativePrompt = `You are a conversation background narrative assistant. Generate a coherent background narrative based on the following information.
+const narrativePrompt = `Generate a coherent background narrative based on the following information.
 
 %s
 
 %s
 
 Integrate the above information into a coherent background narrative with the following requirements:
-1. Use second-person perspective (address the agent as "You"). For example: "You have been discussing X with the user. The user mentioned..."
+1. Use second-person perspective (address the agent as "You"). For example: "You have been discussing X. They mentioned..."
 2. Preserve key information and context
 3. The narrative should be coherent and flowing, not a simple list
 4. Output only the narrative content, without additional explanations
@@ -58,7 +58,7 @@ IMPORTANT: The narrative MUST preserve the original language of the conversation
 // immediately after summary generation. The narrative is stored alongside
 // the summary and retrieved at chat time without LLM call.
 // Uses TemperatureControlled for creative but controlled output.
-func generateNarrativeFromSummary(ctx stdctx.Context, llmConfig *model.LLMConfig, summaryContent string) string {
+func generateNarrativeFromSummary(ctx context.Context, llmConfig *model.LLMConfig, summaryContent string) string {
 	if summaryContent == "" {
 		return ""
 	}

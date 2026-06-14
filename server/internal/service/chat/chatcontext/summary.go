@@ -2,16 +2,17 @@
 //
 // This package provides the context assembly services that build the LLM message
 // sequence from various context sources: summaries, narratives, retrieval results,
-// user state, and task results. It matches Python's chat/context module.
-package chatctx
+// person state, and task results. It matches Python's chat/context module.
+package chatcontext
 
 import (
-	stdctx "context"
+	"context"
 	"fmt"
 
 	"private-buddy-server/internal/config"
 	"private-buddy-server/internal/database"
 	"private-buddy-server/internal/model"
+	"private-buddy-server/internal/service"
 	"private-buddy-server/internal/service/llm"
 
 	applogger "private-buddy-server/internal/logger"
@@ -19,7 +20,7 @@ import (
 
 // summaryPrompt is the LLM prompt template for conversation summarization.
 // It takes two parameters: baseline_summary and recent_messages.
-const summaryPrompt = `You are a conversation summary assistant. Generate a new summary based on the conversation history and baseline summary.
+const summaryPrompt = `Generate a summary based on the conversation history and baseline summary.
 
 Baseline summary (if exists):
 %s
@@ -49,7 +50,7 @@ IMPORTANT: The summary MUST preserve the original language of the conversation.
 // the summary content. Both are written to the database in a single atomic
 // operation, ensuring no intermediate state exists where summary exists but
 // narrative is empty.
-func generateSummary(ctx stdctx.Context, sessionID, agentID int64, llmConfig *model.LLMConfig, version int, windowSize int) error {
+func generateSummary(ctx context.Context, sessionID, agentID int64, llmConfig *model.LLMConfig, agentName string, version int, windowSize int) error {
 	existing := getSummary(sessionID, agentID, version)
 	if existing != nil {
 		applogger.L.Info("Summary already exists", "session_id", sessionID, "agent_id", agentID, "version", version)
@@ -71,7 +72,7 @@ func generateSummary(ctx stdctx.Context, sessionID, agentID int64, llmConfig *mo
 			return nil
 		}
 
-		messagesText := formatMessagesForSummary(messages)
+		messagesText := formatMessagesForSummary(messages, service.GetUserName(), agentName)
 		prompt = fmt.Sprintf(summaryPrompt, "(No baseline summary, this is the first summary)", messagesText)
 	} else {
 		baselineVersion := version - windowSize
@@ -80,7 +81,7 @@ func generateSummary(ctx stdctx.Context, sessionID, agentID int64, llmConfig *mo
 		if baselineSummary == nil {
 			applogger.L.Info("Baseline summary not found, generating recursively",
 				"session_id", sessionID, "agent_id", agentID, "baseline_version", baselineVersion)
-			if err := generateSummary(ctx, sessionID, agentID, llmConfig, baselineVersion, windowSize); err != nil {
+			if err := generateSummary(ctx, sessionID, agentID, llmConfig, agentName, baselineVersion, windowSize); err != nil {
 				applogger.L.Error("Failed to generate baseline summary recursively",
 					"session_id", sessionID, "agent_id", agentID, "baseline_version", baselineVersion, "error", err)
 			}
@@ -99,7 +100,7 @@ func generateSummary(ctx stdctx.Context, sessionID, agentID int64, llmConfig *mo
 			return nil
 		}
 
-		messagesText := formatMessagesForSummary(messages)
+		messagesText := formatMessagesForSummary(messages, service.GetUserName(), agentName)
 		prompt = fmt.Sprintf(summaryPrompt, baselineText, messagesText)
 	}
 
@@ -149,22 +150,27 @@ func getSummary(sessionID, agentID int64, version int) *model.HistoricalSummary 
 // Messages are ordered by their global ID, which corresponds to their insertion order.
 func getMessagesByRange(sessionID int64, startSeq, endSeq int) []model.Message {
 	var messages []model.Message
-	database.DB.Where("session_id = ?", sessionID).
+	if err := database.DB.Where("session_id = ?", sessionID).
 		Order("id ASC").
 		Offset(startSeq - 1).
 		Limit(endSeq - startSeq + 1).
-		Find(&messages)
+		Find(&messages).Error; err != nil {
+		applogger.L.Warn("getMessagesByRange: failed to load messages", "session_id", sessionID, "error", err)
+		return nil
+	}
 	return messages
 }
 
 // formatMessagesForSummary formats messages for the summary prompt.
 // Converts message objects into a human-readable format suitable for LLM summarization.
-func formatMessagesForSummary(messages []model.Message) string {
+// userName is the actual name of the other party, agentName is the agent's own name.
+func formatMessagesForSummary(messages []model.Message, userName, agentName string) string {
+	userRole := userName
 	var formatted []string
 	for _, msg := range messages {
-		role := "User"
+		role := userRole
 		if msg.Role != model.MessageRoleUser {
-			role = "Assistant"
+			role = agentName
 		}
 		formatted = append(formatted, fmt.Sprintf("%s: %s", role, msg.Content))
 	}
@@ -191,7 +197,7 @@ func getLatestSummaryByID(sessionID, agentID int64) *model.HistoricalSummary {
 // generateSummaryForSession is a shared function for triggering summary generation
 // from both the API handler and ChatService.
 // It loads the session, agent, and LLM config before delegating to generateSummary.
-func generateSummaryForSession(ctx stdctx.Context, sessionID, agentID int64, version int, windowSize int) {
+func generateSummaryForSession(ctx context.Context, sessionID, agentID int64, version int, windowSize int) {
 	var llmConfig model.LLMConfig
 	var agent model.Agent
 	if err := database.DB.First(&agent, agentID).Error; err != nil {
@@ -203,7 +209,7 @@ func generateSummaryForSession(ctx stdctx.Context, sessionID, agentID int64, ver
 		return
 	}
 
-	if err := generateSummary(ctx, sessionID, agentID, &llmConfig, version, windowSize); err != nil {
+	if err := generateSummary(ctx, sessionID, agentID, &llmConfig, agent.Name, version, windowSize); err != nil {
 		applogger.L.Error("Summary generation failed", "session_id", sessionID, "agent_id", agentID, "error", err)
 	}
 }
@@ -215,12 +221,15 @@ func generateSummaryForSession(ctx stdctx.Context, sessionID, agentID int64, ver
 // treated equally.
 //
 // This function should be called after ANY message is created (user or agent).
-func MaybeTriggerSummary(ctx stdctx.Context, sessionID, agentID int64) {
+func MaybeTriggerSummary(ctx context.Context, sessionID, agentID int64) {
 	settings := config.Get()
 	windowSize := settings.SummaryWindowSize
 
 	var messageCount int64
-	database.DB.Model(&model.Message{}).Where("session_id = ?", sessionID).Count(&messageCount)
+	if err := database.DB.Model(&model.Message{}).Where("session_id = ?", sessionID).Count(&messageCount).Error; err != nil {
+		applogger.L.Warn("MaybeTriggerSummary: failed to count messages", "session_id", sessionID, "error", err)
+		return
+	}
 
 	if messageCount >= int64(windowSize) && messageCount%int64(windowSize) == 0 {
 		applogger.L.Info("Triggering summary generation",

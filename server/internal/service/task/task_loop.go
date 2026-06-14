@@ -466,7 +466,7 @@ Use write_notes to APPEND a summary entry:
   "references": ["file1.py", "file2.json"]
 }
 
-This will help you continue work if the user requests changes later.`
+This will help you continue work if changes are requested later.`
 
 	messagesWithUpdate := append(messages, llm.Message{
 		Role:    "user",

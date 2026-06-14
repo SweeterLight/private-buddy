@@ -13,21 +13,25 @@ export default function PanelDetail({ title, onBack, onAdd, children }: PanelDet
   return (
     <div className="panel-detail">
       <div className="panel-detail-header">
-        <Button
-          type="text"
-          icon={<ArrowLeftOutlined />}
-          onClick={onBack}
-          style={{ color: 'var(--color-text-secondary)' }}
-        />
-        <span className="panel-detail-title">{title}</span>
-        {onAdd && (
+        <div className="panel-detail-header-left">
           <Button
             type="text"
-            icon={<PlusOutlined />}
-            onClick={onAdd}
+            icon={<ArrowLeftOutlined />}
+            onClick={onBack}
             style={{ color: 'var(--color-text-secondary)' }}
           />
-        )}
+        </div>
+        <span className="panel-detail-title">{title}</span>
+        <div className="panel-detail-header-right">
+          {onAdd && (
+            <Button
+              type="text"
+              icon={<PlusOutlined />}
+              onClick={onAdd}
+              style={{ color: 'var(--color-text-secondary)' }}
+            />
+          )}
+        </div>
       </div>
       <div className="panel-detail-body">
         {children}

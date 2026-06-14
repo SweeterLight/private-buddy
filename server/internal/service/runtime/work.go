@@ -45,8 +45,10 @@ func (w *work) Run(ctx context.Context) {
 		w.agent.workDoneCh <- w
 
 		// Update work status in database
-		database.DB.Model(&model.Work{}).Where("id = ?", w.ID).
-			Update("status", model.WorkStatusCompleted)
+		if err := database.DB.Model(&model.Work{}).Where("id = ?", w.ID).
+			Update("status", model.WorkStatusCompleted).Error; err != nil {
+			applogger.L.Error("work: failed to mark work as completed", "work_id", w.ID, "error", err)
+		}
 	}()
 
 	applogger.L.Info("work started",
@@ -235,18 +237,24 @@ func (w *work) updateDraftContent(content string) {
 		return
 	}
 	w.draft.Content = content
-	database.DB.Model(&model.MessageDraft{}).Where("id = ?", w.draft.ID).
-		Update("content", content)
+	if err := database.DB.Model(&model.MessageDraft{}).Where("id = ?", w.draft.ID).
+		Update("content", content).Error; err != nil {
+		applogger.L.Warn("work: failed to update draft content", "draft_id", w.draft.ID, "error", err)
+	}
 }
 
 // abandon marks the work and its draft as abandoned.
 func (w *work) abandon() {
-	database.DB.Model(&model.Work{}).Where("id = ?", w.ID).
-		Update("status", model.WorkStatusAbandoned)
+	if err := database.DB.Model(&model.Work{}).Where("id = ?", w.ID).
+		Update("status", model.WorkStatusAbandoned).Error; err != nil {
+		applogger.L.Error("work: failed to mark work as abandoned", "work_id", w.ID, "error", err)
+	}
 
 	if w.draft != nil {
-		database.DB.Model(&model.MessageDraft{}).Where("id = ?", w.draft.ID).
-			Update("status", model.DraftStatusDiscarded)
+		if err := database.DB.Model(&model.MessageDraft{}).Where("id = ?", w.draft.ID).
+			Update("status", model.DraftStatusDiscarded).Error; err != nil {
+			applogger.L.Warn("work: failed to discard draft on abandon", "draft_id", w.draft.ID, "error", err)
+		}
 	}
 }
 

@@ -2,10 +2,10 @@ package handler
 
 import (
 	"fmt"
-	"net/http"
 	"os"
 	"strconv"
 
+	"private-buddy-server/internal/api/response"
 	"private-buddy-server/internal/config"
 
 	"github.com/gin-gonic/gin"
@@ -60,7 +60,7 @@ func removeSessionWorkspace(sessionID int64) {
 	os.RemoveAll(workspaceDir)
 }
 
-// handleNotFound returns a 404 JSON response for a missing entity.
+// handleNotFound returns a not-found response via business code.
 func handleNotFound(c *gin.Context, entityName string, id int64) {
-	c.JSON(http.StatusNotFound, gin.H{"detail": fmt.Sprintf("%s %d not found", entityName, id)})
+	response.NotFound(c, fmt.Sprintf("%s %d not found", entityName, id))
 }

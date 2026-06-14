@@ -7,9 +7,8 @@ import (
 )
 
 type KnowledgeBaseCreate struct {
-	Name              string `json:"name" binding:"required"`
-	Description       string `json:"description"`
-	EmbeddingConfigID int64  `json:"embedding_config_id" binding:"required"`
+	Name        string `json:"name" binding:"required"`
+	Description string `json:"description"`
 }
 
 type KnowledgeBaseUpdate struct {
@@ -18,32 +17,30 @@ type KnowledgeBaseUpdate struct {
 }
 
 type KnowledgeBaseResponse struct {
-	ID                int64     `json:"id"`
-	Name              string    `json:"name"`
-	Description       string    `json:"description"`
-	EmbeddingConfigID int64     `json:"embedding_config_id"`
-	IndexType         int       `json:"index_type"`
-	IndexFilePath     string    `json:"index_file_path"`
-	DocumentCount     int       `json:"document_count"`
-	VectorCount       int       `json:"vector_count"`
-	DeletedCount      int       `json:"deleted_count"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID            int64     `json:"id"`
+	Name          string    `json:"name"`
+	Description   string    `json:"description"`
+	IndexType     int       `json:"index_type"`
+	IndexFilePath string    `json:"index_file_path"`
+	DocumentCount int       `json:"document_count"`
+	VectorCount   int       `json:"vector_count"`
+	DeletedCount  int       `json:"deleted_count"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 func NewKnowledgeBaseResponse(m *model.KnowledgeBase) *KnowledgeBaseResponse {
 	return &KnowledgeBaseResponse{
-		ID:                m.ID,
-		Name:              m.Name,
-		Description:       m.Description,
-		EmbeddingConfigID: m.EmbeddingConfigID,
-		IndexType:         m.IndexType,
-		IndexFilePath:     m.IndexFilePath,
-		DocumentCount:     m.DocumentCount,
-		VectorCount:       m.VectorCount,
-		DeletedCount:      m.DeletedCount,
-		CreatedAt:         m.CreatedAt,
-		UpdatedAt:         m.UpdatedAt,
+		ID:            m.ID,
+		Name:          m.Name,
+		Description:   m.Description,
+		IndexType:     m.IndexType,
+		IndexFilePath: m.IndexFilePath,
+		DocumentCount: m.DocumentCount,
+		VectorCount:   m.VectorCount,
+		DeletedCount:  m.DeletedCount,
+		CreatedAt:     m.CreatedAt,
+		UpdatedAt:     m.UpdatedAt,
 	}
 }
 

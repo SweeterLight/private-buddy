@@ -25,9 +25,11 @@ import (
 	"private-buddy-server/internal/config"
 	"private-buddy-server/internal/database"
 	"private-buddy-server/internal/model"
-	chatcontext "private-buddy-server/internal/service/chat/chatctx"
+	"private-buddy-server/internal/service"
+	"private-buddy-server/internal/service/chat/chatcontext"
 	"private-buddy-server/internal/service/kb"
 	"private-buddy-server/internal/service/llm"
+	"private-buddy-server/internal/service/memory"
 	"private-buddy-server/internal/service/task"
 
 	applogger "private-buddy-server/internal/logger"
@@ -98,12 +100,13 @@ type pipeline struct {
 	messageCount   int64
 	windowSize     int
 	kbIDs          []int64
+	userName       string // Human participant's name, empty if not set
 
 	// Channel for async query preprocessing (signal only, data stored in preprocessingResult)
 	preprocessingCh chan struct{}
 
 	// Results from pipeline stages
-	userStateResult       *chatcontext.UserState
+	personStateResult     *chatcontext.PersonState
 	preprocessingResult   *chatcontext.PreprocessingResult
 	needsWorldInteraction bool
 	kbSegments            []chatcontext.Segment
@@ -121,7 +124,7 @@ type pipeline struct {
 //	- V < N: Skip context engineering, use all messages directly (no summary exists)
 //	- V >= N: Apply full context engineering pipeline (summary + retrieval + assembly)
 //
-// Query preprocessing and user state inference run in parallel when either
+// Query preprocessing and person state inference run in parallel when either
 // V >= N or knowledge bases are configured, since both are independent LLM calls.
 //
 // Parameters:
@@ -157,9 +160,11 @@ func Process(
 		return &ChatResult{Content: userFriendlyErrorMessage, HasInteractions: model.HasInteractionsNone}, err
 	}
 
-	// Start async preprocessing first so it runs in parallel with user state inference
+	p.userName = service.GetUserName()
+
+	// Start async preprocessing first so it runs in parallel with person state inference
 	p.preprocessQuery(ctx)
-	p.inferUserState(ctx)
+	p.inferPersonState(ctx)
 
 	p.retrieveKnowledgeBases(ctx)
 	p.executeAgentIfNeeded(ctx)
@@ -230,7 +235,9 @@ func (p *pipeline) loadMessages() error {
 	}
 
 	p.sessionID = p.session.ID
-	database.DB.Model(&model.Message{}).Where("session_id = ?", p.sessionID).Count(&p.messageCount)
+	if err := database.DB.Model(&model.Message{}).Where("session_id = ?", p.sessionID).Count(&p.messageCount).Error; err != nil {
+		applogger.L.Warn("failed to count messages for chat pipeline", "session_id", p.sessionID, "error", err)
+	}
 	p.windowSize = config.Get().SummaryWindowSize
 	p.kbIDs = getKnowledgeBaseIDs(p.agent)
 
@@ -269,22 +276,24 @@ func (p *pipeline) preprocessQuery(ctx context.Context) {
 			preprocessingHistory,
 			characterSettings,
 			p.windowSize,
+			p.userName,
+			p.agent.Name,
 		)
 		p.preprocessingResult = result
 	}()
 }
 
-// inferUserState infers the user's state from recent messages.
+// inferPersonState infers the user's state from recent messages.
 // This runs synchronously; query preprocessing runs in parallel via preprocessQuery().
-func (p *pipeline) inferUserState(ctx context.Context) {
+func (p *pipeline) inferPersonState(ctx context.Context) {
 	recentMessagesForState := chatcontext.GetRecentMessages(
 		p.sessionID, min(int(p.messageCount), p.windowSize), model.MessageStatusCompleted,
 	)
 
-	p.userStateResult = chatcontext.InferUserState(ctx, p.llmConfig, recentMessagesForState)
+	p.personStateResult = chatcontext.InferPersonState(ctx, p.llmConfig, recentMessagesForState, p.userName, p.agent.Name)
 
-	if p.userStateResult != nil {
-		p.needsWorldInteraction = p.userStateResult.NeedsWorldInteraction
+	if p.personStateResult != nil {
+		p.needsWorldInteraction = p.personStateResult.NeedsWorldInteraction
 	}
 	applogger.L.Info("User state inference",
 		"needs_world_interaction", p.needsWorldInteraction,
@@ -364,8 +373,16 @@ func (p *pipeline) assembleSimpleContext() ([]llm.Message, string, bool) {
 	)
 
 	characterSettings := p.agent.CharacterSettings
+
+	entityProfileSection := chatcontext.FormatEntityProfileSection(
+		memory.LoadProfileForEntity(p.agent.ID, model.EntityTypeUser, 1),
+		p.userName,
+	)
+
 	messages := chatcontext.AssembleContext(
 		characterSettings,
+		"",
+		entityProfileSection,
 		"",
 		recentMessages,
 		p.kbSegments,
@@ -374,6 +391,7 @@ func (p *pipeline) assembleSimpleContext() ([]llm.Message, string, bool) {
 		len(recentMessages),
 		"",
 		p.taskResult,
+		p.userName,
 	)
 	p.hasEmbedding = len(p.kbSegments) > 0
 	return messages, "", false
@@ -426,10 +444,10 @@ func (p *pipeline) assembleEngineeredContext(ctx context.Context) ([]llm.Message
 		backgroundStory = contextResult.Narrative
 	}
 
-	// Convert user state to natural language description for prompt injection
-	var userStateDescription string
-	if p.userStateResult != nil {
-		userStateDescription = p.userStateResult.ToNaturalLanguage()
+	// Convert person state to natural language description for prompt injection
+	var personStateDescription string
+	if p.personStateResult != nil {
+		personStateDescription = p.personStateResult.ToNaturalLanguage(p.userName)
 	}
 
 	// Calculate message sequence numbers for metadata
@@ -441,16 +459,38 @@ func (p *pipeline) assembleEngineeredContext(ctx context.Context) ([]llm.Message
 	recentStart := int(p.messageCount) - len(contextResult.RecentMessages) + 1
 
 	characterSettings := p.agent.CharacterSettings
+
+	// Apply RAG retrieval hits to the memory system: chat-history segments
+	// that were retrieved count as observation retrieval hits, boosting
+	// importance scores.
+	var ragHitIDs []int64
+	for _, seg := range contextResult.RelevantSegments {
+		if seg.Source == chatcontext.SourceChatHistory && seg.MessageID > 0 {
+			ragHitIDs = append(ragHitIDs, seg.MessageID)
+		}
+	}
+	if len(ragHitIDs) > 0 {
+		memory.OnRAGHit(p.agent.ID, ragHitIDs)
+	}
+
+	entityProfileSection := chatcontext.FormatEntityProfileSection(
+		memory.LoadProfileForEntity(p.agent.ID, model.EntityTypeUser, 1),
+		p.userName,
+	)
+
 	messages := chatcontext.AssembleContext(
 		characterSettings,
+		"",
+		entityProfileSection,
 		backgroundStory,
 		contextResult.RecentMessages,
 		relevantSegments,
 		summaryVersion,
 		recentStart,
 		int(p.messageCount),
-		userStateDescription,
+		personStateDescription,
 		p.taskResult,
+		p.userName,
 	)
 	return messages, "", false
 }
@@ -547,7 +587,7 @@ func executeAgent(
 		})
 	}
 
-	rewrittenRequirement := task.Rewrite(ctx, llmConfig, triggerMessage.Content, history, 10)
+	rewrittenRequirement := task.Rewrite(ctx, llmConfig, triggerMessage.Content, history, 10, agent.Name, service.GetUserName())
 	applogger.L.Info("Task requirement rewritten",
 		"session_id", sessionID,
 		"original", triggerMessage.Content[:min(50, len(triggerMessage.Content))],
@@ -556,7 +596,9 @@ func executeAgent(
 
 	// Execute agent via TaskExecutor
 	var searchConfig model.SearchConfig
-	database.DB.Where("is_active = ?", true).First(&searchConfig)
+	if err := database.DB.Where("is_active = ?", true).First(&searchConfig).Error; err != nil {
+		applogger.L.Warn("failed to load active search config, proceeding without search", "error", err)
+	}
 
 	taskResult := task.Execute(task.TaskParams{
 		TaskRequirement: rewrittenRequirement,
@@ -597,8 +639,11 @@ func executeAgent(
 // preprocessing needs the full recent conversation to correctly classify and rewrite queries.
 func getPreprocessingHistory(sessionID int64, limit int) []llm.Message {
 	var messages []model.Message
-	database.DB.Where("session_id = ?", sessionID).
-		Order("id DESC").Limit(limit).Find(&messages)
+	if err := database.DB.Where("session_id = ?", sessionID).
+		Order("id DESC").Limit(limit).Find(&messages).Error; err != nil {
+		applogger.L.Warn("getPreprocessingHistory: failed to load messages", "session_id", sessionID, "error", err)
+		return nil
+	}
 
 	// Reverse to chronological order
 	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {

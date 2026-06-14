@@ -52,7 +52,6 @@ export interface Agent {
   name: string;
   character_settings: string;
   llm_config_id: number;
-  embedding_config_id: number;
   description: string;
   avatar: string;
   knowledge_base_ids: number[];
@@ -117,7 +116,6 @@ export interface KnowledgeBase {
   id: number;
   name: string;
   description: string;
-  embedding_config_id: number;
   index_type: number; // 0=flat, 1=switching, 2=hnsw
   index_file_path: string;
   document_count: number;
@@ -167,4 +165,12 @@ export interface SessionAgentStatus {
   name: string;
   avatar: string;
   status: number; // 0=idle, 1=working
+}
+
+export interface UserProfile {
+  id: number;
+  name: string;
+  bio: string;
+  created_at: string;
+  updated_at: string;
 }

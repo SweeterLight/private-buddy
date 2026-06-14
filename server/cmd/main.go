@@ -16,8 +16,11 @@ import (
 	"private-buddy-server/internal/config"
 	"private-buddy-server/internal/database"
 	"private-buddy-server/internal/logger"
+	"private-buddy-server/internal/service"
 	"private-buddy-server/internal/service/eventqueue"
 	"private-buddy-server/internal/service/kb"
+	"private-buddy-server/internal/service/llm"
+	"private-buddy-server/internal/service/memory"
 	"private-buddy-server/internal/service/runtime"
 	"private-buddy-server/internal/service/task/tools"
 
@@ -55,6 +58,12 @@ func main() {
 
 	database.Init()
 	database.AutoMigrate()
+
+	// Initialize memory system with embedding service for event vector storage.
+	// Load the first agent's embedding config to create the service.
+	memory.Init(getEmbeddingService())
+	memCtx, memCancel := context.WithCancel(context.Background())
+	go memory.Start(memCtx)
 
 	// Initialize the Agent Runtime system with SSE callbacks
 	onStatusChange := func(agentID, sessionID int64, status int) {
@@ -120,6 +129,9 @@ func main() {
 	applogger.L.Info("Stopping agent runtimes...")
 	runtime.StopAll()
 
+	// Shut down the memory system (vectorization + daily cron)
+	memCancel()
+
 	// Cancel all pending alarm goroutines
 	applogger.L.Info("Cancelling pending alarms...")
 	tools.CancelAlarms()
@@ -133,4 +145,20 @@ func main() {
 	}
 
 	applogger.L.Info("Server stopped gracefully")
+}
+
+// getEmbeddingService creates an EmbeddingService from the global embedding config.
+// Returns nil if no embedding config exists.
+func getEmbeddingService() *llm.EmbeddingService {
+	embConfig := service.GetEmbeddingConfig()
+	if embConfig == nil {
+		return nil
+	}
+
+	embSvc := llm.NewEmbeddingService(embConfig.BaseURL, embConfig.APIKey, embConfig.ModelID, 1536)
+	applogger.L.Info("Embedding service created",
+		"config_name", embConfig.Name,
+		"model", embConfig.ModelID,
+	)
+	return embSvc
 }

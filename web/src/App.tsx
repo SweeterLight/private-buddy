@@ -1,27 +1,28 @@
 import { useState, useEffect } from 'react';
-import { Button, Tooltip, message } from 'antd';
+import { Button, Tooltip, Spin, message } from 'antd';
 import { SettingOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { changeLanguage, getCurrentLanguage } from './i18n';
 import useScrolling from './hooks/useScrolling';
-import AgentList from './components/AgentList';
+import SessionList from './components/SessionList';
 import ChatWindow from './components/ChatWindow';
 import LLMConfigList from './components/LLMConfigList';
-import EmbeddingConfigList from './components/EmbeddingConfigList';
+import EmbeddingConfigForm from './components/EmbeddingConfigList';
 import AgentConfig from './components/AgentConfig';
 import SearchConfigForm from './components/SearchConfigForm';
+import UserProfileForm from './components/UserProfileForm';
 import ResizableCard from './components/ResizableCard';
 import PanelDetail from './components/PanelDetail';
 import KnowledgeBaseList from './components/KnowledgeBaseList';
 import KnowledgeBaseDetail from './components/KnowledgeBaseDetail';
 import { ConfigIcon } from './components/AgentAvatar';
-import { versionApi, initApiClient } from './services/api';
+import { versionApi, userProfileApi, embeddingConfigApi, initApiClient } from './services/api';
 import { logger } from './logger';
 import type { IconType } from './components/AgentAvatar';
 import type { Session, LLMConfig, KnowledgeBase } from './types';
 import './App.css';
 
-type RightPanelView = null | 'settings-overview' | 'settings-agent' | 'settings-llm' | 'settings-embedding' | 'settings-search' | 'settings-language' | 'settings-kb' | 'settings-kb-detail';
+type RightPanelView = null | 'settings-overview' | 'settings-user' | 'settings-agent' | 'settings-llm' | 'settings-embedding' | 'settings-search' | 'settings-language' | 'settings-kb' | 'settings-kb-detail';
 
 const SETTINGS_CARDS: { key: string; iconType: IconType }[] = [
   { key: 'settings-agent', iconType: 'agent' },
@@ -30,6 +31,7 @@ const SETTINGS_CARDS: { key: string; iconType: IconType }[] = [
   { key: 'settings-embedding', iconType: 'embedding' },
   { key: 'settings-search', iconType: 'search' },
   { key: 'settings-language', iconType: 'language' },
+  { key: 'settings-user', iconType: 'user' },
 ];
 
 function App() {
@@ -39,13 +41,15 @@ function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [showCreateAgent, setShowCreateAgent] = useState(false);
   const [showCreateLLM, setShowCreateLLM] = useState(false);
-  const [showCreateEmbedding, setShowCreateEmbedding] = useState(false);
   const [showCreateKB, setShowCreateKB] = useState(false);
   const [selectedKB, setSelectedKB] = useState<KnowledgeBase | null>(null);
   const [currentLang, setCurrentLang] = useState(getCurrentLanguage());
   const [version, setVersion] = useState<string>('');
   const [isMacElectron, setIsMacElectron] = useState(false);
   const [isWinLinuxElectron, setIsWinLinuxElectron] = useState(false);
+  const [userProfileReady, setUserProfileReady] = useState(false);
+  const [userProfileChecking, setUserProfileChecking] = useState(true);
+  const [embeddingReady, setEmbeddingReady] = useState(false);
 
   useScrolling();
 
@@ -71,6 +75,36 @@ function App() {
     });
     return unsubscribe;
   }, []);
+
+  // On mount, check if user profile exists.
+  useEffect(() => {
+    setUserProfileChecking(true);
+    userProfileApi.get()
+      .then((res) => {
+        if (res.data.id) {
+          setUserProfileReady(true);
+        } else {
+          setUserProfileReady(false);
+        }
+        setUserProfileChecking(false);
+      })
+      .catch(() => {
+        setUserProfileReady(false);
+        setUserProfileChecking(false);
+      });
+  }, []);
+
+  // After user profile is confirmed, check if embedding is configured.
+  useEffect(() => {
+    if (!userProfileReady) return;
+    embeddingConfigApi.get()
+      .then((res) => {
+        setEmbeddingReady(!!res.data.id);
+      })
+      .catch(() => {
+        setEmbeddingReady(false);
+      });
+  }, [userProfileReady]);
 
   useEffect(() => {
     if (!window.electronAPI?.onBackendError) return;
@@ -123,6 +157,7 @@ function App() {
   const goBackToSettings = () => setRightPanelView('settings-overview');
 
   const settingsLabelMap: Record<string, string> = {
+    'settings-user': t('settings.userProfile'),
     'settings-agent': t('settings.agentConfig'),
     'settings-kb': t('settings.kbConfig'),
     'settings-llm': t('settings.llmConfig'),
@@ -137,16 +172,24 @@ function App() {
     <div className="panel-overview">
       <div className="panel-overview-title">{t('settings.title')}</div>
       <div className="panel-card-grid">
-        {SETTINGS_CARDS.map(({ key, iconType }) => (
-          <div
-            key={key}
-            className="panel-card"
-            onClick={() => setRightPanelView(key as RightPanelView)}
-          >
-            <ConfigIcon type={iconType} size={48} iconSize={22} borderRadius="12px" marginBottom={12} />
-            <div className="panel-card-label">{settingsLabelMap[key]}</div>
-          </div>
-        ))}
+        {SETTINGS_CARDS.map(({ key, iconType }) => {
+          const needsEmbedding = key === 'settings-agent' || key === 'settings-kb';
+          const disabled = needsEmbedding && !embeddingReady;
+          return (
+            <Tooltip key={key} title={disabled ? t('embeddingRequired.message_1') : undefined}>
+              <div
+                className={`panel-card${disabled ? ' panel-card-disabled' : ''}`}
+                onClick={() => {
+                  if (disabled) return;
+                  setRightPanelView(key as RightPanelView);
+                }}
+              >
+                <ConfigIcon type={iconType} size={48} iconSize={22} borderRadius="12px" marginBottom={12} />
+                <div className="panel-card-label">{settingsLabelMap[key]}</div>
+              </div>
+            </Tooltip>
+          );
+        })}
       </div>
     </div>
   );
@@ -174,6 +217,16 @@ function App() {
     switch (rightPanelView) {
       case 'settings-overview':
         return renderSettingsOverview();
+
+      case 'settings-user':
+        return (
+          <PanelDetail
+            title={t('userProfile.title')}
+            onBack={goBackToSettings}
+          >
+            <UserProfileForm />
+          </PanelDetail>
+        );
 
       case 'settings-agent':
         return (
@@ -249,12 +302,8 @@ function App() {
           <PanelDetail
             title={t('embeddingConfig.title')}
             onBack={goBackToSettings}
-            onAdd={() => setShowCreateEmbedding(true)}
           >
-            <EmbeddingConfigList
-              showCreate={showCreateEmbedding}
-              onCreateClose={() => setShowCreateEmbedding(false)}
-            />
+            <EmbeddingConfigForm onCreated={() => setEmbeddingReady(true)} />
           </PanelDetail>
         );
 
@@ -272,6 +321,32 @@ function App() {
         return null;
     }
   };
+
+  // If user profile is still being checked, show full-screen loading.
+  if (userProfileChecking) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        height: '100vh', width: '100vw', background: 'var(--color-bg)',
+      }}>
+        <Spin size="large" />
+      </div>
+    );
+  }
+
+  // If user has not set up their profile, show full-screen onboarding page.
+  if (!userProfileReady) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        height: '100vh', width: '100vw', background: 'var(--color-bg)',
+      }}>
+        <div style={{ textAlign: 'center', maxWidth: 400, padding: '40px 32px' }}>
+          <UserProfileForm onCreated={() => setUserProfileReady(true)} welcome />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="app-container">
@@ -303,9 +378,10 @@ function App() {
           resizeSide="right"
           className="app-sidebar-wrapper"
         >
-          <AgentList
+          <SessionList
             key={refreshKey}
             currentSessionId={currentSession?.id || null}
+            embeddingReady={embeddingReady}
             onSelectSession={handleSelectSession}
             onCreateSession={handleCreateSession}
           />

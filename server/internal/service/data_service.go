@@ -48,7 +48,9 @@ func GetSearchConfig() *model.SearchConfig {
 			Description: "",
 			IsActive:    false,
 		}
-		database.DB.Create(&config)
+		if err := database.DB.Create(&config).Error; err != nil {
+			applogger.L.Error("failed to create default search config", "error", err)
+		}
 	}
 	return &config
 }
@@ -72,8 +74,12 @@ func UpdateSearchConfig(provider, apiKey, description *string, isActive *bool) *
 	}
 
 	if len(updates) > 0 {
-		database.DB.Model(config).Updates(updates)
-		database.DB.First(config, 1)
+		if err := database.DB.Model(config).Updates(updates).Error; err != nil {
+			applogger.L.Error("failed to update search config", "error", err)
+		}
+		if err := database.DB.First(config, 1).Error; err != nil {
+			applogger.L.Warn("failed to refresh search config after update", "error", err)
+		}
 	}
 
 	applogger.L.Info("SearchConfig updated",
@@ -82,4 +88,80 @@ func UpdateSearchConfig(provider, apiKey, description *string, isActive *bool) *
 		"has_api_key", config.APIKey != "",
 	)
 	return config
+}
+
+// GetEmbeddingConfig retrieves the global embedding configuration (first row).
+// Returns nil if no embedding config exists at all.
+func GetEmbeddingConfig() *model.EmbeddingConfig {
+	var config model.EmbeddingConfig
+	if err := database.DB.Order("id ASC").First(&config).Error; err != nil {
+		applogger.L.Warn("No embedding config found, embedding-dependent features unavailable")
+		return nil
+	}
+	return &config
+}
+
+// IsEmbeddingConfigured returns true if an embedding config exists and has
+// a non-empty API key.
+func IsEmbeddingConfigured() bool {
+	cfg := GetEmbeddingConfig()
+	return cfg != nil && cfg.APIKey != ""
+}
+
+// UpdateEmbeddingConfig updates the global embedding configuration.
+// If no config exists, creates one; otherwise updates the first row.
+func UpdateEmbeddingConfig(req model.EmbeddingConfig) *model.EmbeddingConfig {
+	config := GetEmbeddingConfig()
+	if config == nil {
+		if err := database.DB.Create(&req).Error; err != nil {
+			applogger.L.Error("Failed to create embedding config", "error", err)
+			return nil
+		}
+		config = &req
+	} else {
+		if err := database.DB.Model(config).Updates(req).Error; err != nil {
+			applogger.L.Error("Failed to update embedding config", "error", err)
+			return nil
+		}
+		if err := database.DB.First(config, config.ID).Error; err != nil {
+			applogger.L.Warn("failed to refresh embedding config after update", "id", config.ID, "error", err)
+		}
+	}
+
+	applogger.L.Info("Embedding config updated",
+		"name", config.Name,
+		"model", config.ModelID,
+	)
+	return config
+}
+
+// GetUserProfile retrieves the user profile for the primary user (id=1).
+// Returns nil if the user has not been set up yet.
+func GetUserProfile() *model.User {
+	var user model.User
+	if err := database.DB.Where("id = ?", 1).First(&user).Error; err != nil {
+		return nil
+	}
+	return &user
+}
+
+// CreateUser creates the initial user profile.
+// Name is immutable once set. Returns error on duplicate.
+func CreateUser(name, bio string) (*model.User, error) {
+	user := model.User{Name: name, Bio: bio}
+	if err := database.DB.Create(&user).Error; err != nil {
+		return nil, err
+	}
+	applogger.L.Info("User profile created", "name", name)
+	return &user, nil
+}
+
+// GetUserName returns the primary user's name (id=1).
+func GetUserName() string {
+	var user model.User
+	if err := database.DB.Where("id = ?", 1).Select("name").First(&user).Error; err != nil {
+		applogger.L.Warn("failed to load user name", "error", err)
+		return ""
+	}
+	return user.Name
 }

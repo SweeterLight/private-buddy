@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Modal, Form, Input, Select, message, Tag } from 'antd';
+import { Button, Modal, Form, Input, message, Tag } from 'antd';
 import { DeleteOutlined, EditOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
-import type { KnowledgeBase, EmbeddingConfig } from '../types';
-import { kbApi, embeddingConfigApi } from '../services/api';
+import type { KnowledgeBase } from '../types';
+import { kbApi } from '../services/api';
 import { logger } from '../logger';
 import { confirmDelete } from '../utils/confirm';
 import { ConfigIcon } from './AgentAvatar';
@@ -23,7 +23,6 @@ const STATUS_MAP: Record<number, { color: string; labelKey: string }> = {
 const KnowledgeBaseList: React.FC<KnowledgeBaseListProps> = ({ onSelectKB, showCreate, onCreateClose }) => {
   const { t } = useTranslation();
   const [kbs, setKBs] = useState<KnowledgeBase[]>([]);
-  const [embeddingConfigs, setEmbeddingConfigs] = useState<EmbeddingConfig[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [editModalVisible, setEditModalVisible] = useState(false);
@@ -43,18 +42,8 @@ const KnowledgeBaseList: React.FC<KnowledgeBaseListProps> = ({ onSelectKB, showC
     }
   };
 
-  const loadEmbeddingConfigs = async () => {
-    try {
-      const response = await embeddingConfigApi.list();
-      setEmbeddingConfigs(response.data);
-    } catch (error) {
-      logger.error('Failed to load embedding configs:', error);
-    }
-  };
-
   useEffect(() => {
     loadKBs();
-    loadEmbeddingConfigs();
   }, []);
 
   useEffect(() => {
@@ -127,7 +116,6 @@ const KnowledgeBaseList: React.FC<KnowledgeBaseListProps> = ({ onSelectKB, showC
     editForm.setFieldsValue({
       name: kb.name,
       description: kb.description,
-      embedding_config_id: kb.embedding_config_id,
     });
     setEditModalVisible(true);
   };
@@ -146,19 +134,6 @@ const KnowledgeBaseList: React.FC<KnowledgeBaseListProps> = ({ onSelectKB, showC
         </Form.Item>
         <Form.Item label={t('kb.description')} name="description">
           <Input.TextArea placeholder={t('kb.descriptionPlaceholder')} rows={2} />
-        </Form.Item>
-        <Form.Item
-          label={t('kb.embeddingConfigId')}
-          name="embedding_config_id"
-          rules={[{ required: true, message: t('kb.embeddingConfigIdPlaceholder') }]}
-        >
-          <Select placeholder={t('kb.embeddingConfigIdPlaceholder')}>
-            {embeddingConfigs.map(config => (
-              <Select.Option key={config.id} value={config.id}>
-                {config.name}
-              </Select.Option>
-            ))}
-          </Select>
         </Form.Item>
         {isEdit && currentKB && (
           <div style={{ marginBottom: 16 }}>

@@ -1,7 +1,7 @@
-package chatctx
+package chatcontext
 
 import (
-	stdctx "context"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -21,36 +21,36 @@ const queryTypeVague = "vague"         // Query is too vague to understand inten
 const queryTypeNoQuery = "no_query"    // Query doesn't need retrieval (greetings, etc.)
 
 // routingPrompt is the LLM prompt template for query type classification.
-// It takes two parameters: history (formatted conversation) and query (user message).
-const routingPrompt = `Analyze the user query type and process accordingly.
+// It takes two parameters: history (formatted conversation) and query (the person's message).
+const routingPrompt = `Analyze the query type and process accordingly.
 
 Conversation history:
 %s
 
-Current user query: %s
+Current query: %s
 
 Classify the query type and process:
 1. "no_query" - No retrieval needed: greetings, chitchat, emotional expressions, simple responses, etc. that can be answered without retrieving historical information.
 2. "clear" - Clear query: the query is complete and unambiguous, requiring relevant information to answer.
-3. "ambiguous" - Ambiguous reference: the query contains pronouns (like "it", "that", "this") or references to previous content, requiring context to understand. For this type, you MUST rewrite the user's query into a complete, clear query that can be understood independently without relying on conversation history.
-4. "vague" - Too vague: the query is too brief or ambiguous, making it difficult to determine user intent even with context. For this type, explain the reason for vagueness.`
+3. "ambiguous" - Ambiguous reference: the query contains pronouns (like "it", "that", "this") or references to previous content, requiring context to understand. For this type, you MUST rewrite the query into a complete, clear query that can be understood independently without relying on conversation history.
+4. "vague" - Too vague: the query is too brief or ambiguous, making it difficult to determine intent even with context. For this type, explain the reason for vagueness.`
 
 // clarifyPrompt is the LLM prompt template for generating clarification questions.
 // It takes three parameters: history, query, and reason.
-const clarifyPrompt = `The user's query is too vague and needs clarification.
+const clarifyPrompt = `The query is too vague and needs clarification.
 
 Conversation history:
 %s
 
-User query: %s
+Query: %s
 
 Reason for vagueness: %s
 
-Generate a clarification question to help the user clarify their intent. The question should be concise, specific, and provide possible options.
+Generate a clarification question. The question should be concise, specific, and provide possible options.
 
-IMPORTANT: The clarification question MUST be in the SAME LANGUAGE as the user's query.
-- If the user query is in Chinese, respond in Chinese.
-- If the user query is in English, respond in English.
+IMPORTANT: The clarification question MUST be in the SAME LANGUAGE as the original query.
+- If the query is in Chinese, respond in Chinese.
+- If the query is in English, respond in English.
 
 Output only the clarification question, without any additional content.`
 
@@ -75,7 +75,8 @@ type PreprocessingResult struct {
 
 // formatHistoryForPreprocessing formats conversation history for preprocessing prompts.
 // Limits to the most recent maxMessages if > 0.
-func formatHistoryForPreprocessing(history []llm.Message, maxMessages int) string {
+// userName is the actual name of the other party, agentName is the agent's own name.
+func formatHistoryForPreprocessing(history []llm.Message, maxMessages int, userName, agentName string) string {
 	if len(history) == 0 {
 		return "(No conversation history)"
 	}
@@ -85,11 +86,13 @@ func formatHistoryForPreprocessing(history []llm.Message, maxMessages int) strin
 		recent = history[len(history)-maxMessages:]
 	}
 
+	userRole := userName
+
 	var formatted []string
 	for _, msg := range recent {
-		role := "User"
+		role := userRole
 		if msg.Role != "user" {
-			role = "Assistant"
+			role = agentName
 		}
 		formatted = append(formatted, fmt.Sprintf("%s: %s", role, msg.Content))
 	}
@@ -100,15 +103,17 @@ func formatHistoryForPreprocessing(history []llm.Message, maxMessages int) strin
 // Uses JSON Schema structured output for deterministic classification.
 // Uses TemperatureDeterministic for consistent, deterministic outputs.
 func routeQuery(
-	ctx stdctx.Context,
+	ctx context.Context,
 	llmConfig *model.LLMConfig,
 	query string,
 	history []llm.Message,
 	maxMessages int,
+	userName string,
+	agentName string,
 ) *QueryRoutingResult {
 	chatModel := llm.NewChatModelWithTemperature(llmConfig.BaseURL, llmConfig.APIKey, llmConfig.ModelID, llm.TemperatureDeterministic)
 
-	historyText := formatHistoryForPreprocessing(history, maxMessages)
+	historyText := formatHistoryForPreprocessing(history, maxMessages, userName, agentName)
 	prompt := fmt.Sprintf(routingPrompt, historyText, query)
 
 	result, err := chatModel.ChatWithJSONSchema(ctx, []llm.Message{
@@ -161,17 +166,19 @@ func routeQuery(
 // If characterSettings is non-empty, it is prepended to the prompt for personality alignment.
 // Uses TemperatureDeterministic for consistent outputs.
 func generateClarification(
-	ctx stdctx.Context,
+	ctx context.Context,
 	llmConfig *model.LLMConfig,
 	query string,
 	history []llm.Message,
 	reason string,
 	characterSettings string,
 	maxMessages int,
+	userName string,
+	agentName string,
 ) string {
 	chatModel := llm.NewChatModelWithTemperature(llmConfig.BaseURL, llmConfig.APIKey, llmConfig.ModelID, llm.TemperatureDeterministic)
 
-	historyText := formatHistoryForPreprocessing(history, maxMessages)
+	historyText := formatHistoryForPreprocessing(history, maxMessages, userName, agentName)
 	prompt := fmt.Sprintf(clarifyPrompt, historyText, query, reason)
 
 	if characterSettings != "" {
@@ -197,12 +204,14 @@ func generateClarification(
 //   - ambiguous: rewrite query with context for retrieval
 //   - vague: generate clarification question, mark as needs_clarification
 func PreprocessQuery(
-	ctx stdctx.Context,
+	ctx context.Context,
 	llmConfig *model.LLMConfig,
 	query string,
 	history []llm.Message,
 	characterSettings string,
 	maxMessages int,
+	userName string,
+	agentName string,
 ) *PreprocessingResult {
 	result := &PreprocessingResult{
 		OriginalQuery:  query,
@@ -210,7 +219,7 @@ func PreprocessQuery(
 		QueryType:      queryTypeClear,
 	}
 
-	routing := routeQuery(ctx, llmConfig, query, history, maxMessages)
+	routing := routeQuery(ctx, llmConfig, query, history, maxMessages, userName, agentName)
 	queryType := routing.Type
 	result.QueryType = queryType
 
@@ -235,7 +244,7 @@ func PreprocessQuery(
 		if routing.Reason != "" {
 			reason = routing.Reason
 		}
-		clarification := generateClarification(ctx, llmConfig, query, history, reason, characterSettings, maxMessages)
+		clarification := generateClarification(ctx, llmConfig, query, history, reason, characterSettings, maxMessages, userName, agentName)
 		result.NeedsClarification = true
 		result.Clarification = clarification
 	}

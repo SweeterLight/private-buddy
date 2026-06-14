@@ -44,12 +44,12 @@ type decisionOutput struct {
 }
 
 // decidePromptTemplate is the LLM prompt template for decision making.
-// Parameters: agent_description, message_content
-const decidePromptTemplate = `You are an AI assistant deciding how to respond to a user message.
+// Parameters: agent_name, agent_description, message_content
+const decidePromptTemplate = `You are %s, deciding how to respond to a message.
 
-Agent role: %s
+Role description: %s
 
-User message: %s
+Message: %s
 
 Decide the appropriate action:
 - "reply_now": Simple question, greeting, or casual chat. The agent can answer directly from its knowledge without tools or long processing.
@@ -105,7 +105,7 @@ func Decide(ctx context.Context, event eventqueue.AgentEvent, agent *model.Agent
 		agentDescription = agent.Description
 	}
 
-	prompt := fmt.Sprintf(decidePromptTemplate, agentDescription, messageContent)
+	prompt := fmt.Sprintf(decidePromptTemplate, agent.Name, agentDescription, messageContent)
 
 	chatModel := llm.NewChatModelWithTemperature(
 		llmConfig.BaseURL, llmConfig.APIKey, llmConfig.ModelID, llm.TemperatureDeterministic,
@@ -115,7 +115,7 @@ func Decide(ctx context.Context, event eventqueue.AgentEvent, agent *model.Agent
 		{Role: "user", Content: prompt},
 	}, llm.JSONSchemaDefinition{
 		Name:        "Decision",
-		Description: "Agent's decision on how to respond to a user message",
+		Description: "Agent's decision on how to respond to a message",
 		Strict:      true,
 		Schema: jsonschema.Definition{
 			Type: jsonschema.Object,

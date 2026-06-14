@@ -5,7 +5,7 @@ import "time"
 // EmbeddingConfig stores the configuration for the embedding API provider.
 // Used for RAG (Retrieval-Augmented Generation) vector operations.
 type EmbeddingConfig struct {
-	ID          int64     `gorm:"primaryKey;autoIncrement" json:"id"`
+	ID          int64     `gorm:"primaryKey;autoIncrement;type:INTEGER PRIMARY KEY AUTOINCREMENT" json:"id"`
 	Name        string    `gorm:"type:varchar(100);not null" json:"name"`
 	ModelID     string    `gorm:"type:varchar(100);not null;column:model_id" json:"model_id"`
 	BaseURL     string    `gorm:"type:varchar(255);not null;column:base_url" json:"base_url"`

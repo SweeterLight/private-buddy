@@ -1,32 +1,129 @@
-import ConfigList from './ConfigList';
-import { embeddingConfigApi } from '../services/api';
+import React, { useState, useEffect } from 'react';
+import { Form, Input, Button, message, Spin } from 'antd';
+import { SaveOutlined, ReloadOutlined } from '@ant-design/icons';
+import { useTranslation } from 'react-i18next';
 import type { EmbeddingConfig } from '../types';
+import { embeddingConfigApi } from '../services/api';
 
-const FORM_FIELDS = [
-  { name: 'name', labelKey: 'name', placeholderKey: 'namePlaceholder', required: true },
-  { name: 'model_id', labelKey: 'modelId', placeholderKey: 'modelIdPlaceholder', required: true },
-  { name: 'base_url', labelKey: 'baseUrl', placeholderKey: 'baseUrlPlaceholder', required: true },
-  { name: 'api_key', labelKey: 'apiKey', placeholderKey: 'apiKeyPlaceholder', required: true, type: 'password' as const },
-  { name: 'description', labelKey: 'description', placeholderKey: 'descriptionPlaceholder', type: 'textarea' as const, rows: 2 },
-];
+const EmbeddingConfigForm: React.FC<{ onCreated?: () => void }> = ({ onCreated }) => {
+  const { t } = useTranslation();
+  const [form] = Form.useForm();
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [config, setConfig] = useState<EmbeddingConfig | null>(null);
 
-interface EmbeddingConfigListProps {
-  onSelectConfig?: (config: EmbeddingConfig | null) => void;
-  showCreate?: boolean;
-  onCreateClose?: () => void;
-}
+  useEffect(() => {
+    loadConfig();
+  }, []);
 
-export default function EmbeddingConfigList({ onSelectConfig, showCreate, onCreateClose }: EmbeddingConfigListProps) {
+  const loadConfig = async () => {
+    setLoading(true);
+    try {
+      const response = await embeddingConfigApi.get();
+      setConfig(response.data);
+      form.setFieldsValue(response.data);
+    } catch (error) {
+      message.error(t('embeddingConfig.loadError'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSave = async (values: Partial<EmbeddingConfig>) => {
+    setSaving(true);
+    try {
+      const response = await embeddingConfigApi.update(values);
+      setConfig(response.data);
+      message.success(t('embeddingConfig.saveSuccess'));
+      onCreated?.();
+    } catch (error) {
+      message.error(t('embeddingConfig.saveError'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleReset = () => {
+    if (config) {
+      form.setFieldsValue(config);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
+        <Spin />
+      </div>
+    );
+  }
+
   return (
-    <ConfigList<EmbeddingConfig>
-      iconType="embedding"
-      api={embeddingConfigApi}
-      formFields={FORM_FIELDS}
-      i18nPrefix="embeddingConfig"
-      displayField="model_id"
-      onSelectConfig={onSelectConfig}
-      showCreate={showCreate}
-      onCreateClose={onCreateClose}
-    />
+    <div className="config-form-container">
+      <Form
+        form={form}
+        layout="vertical"
+        onFinish={handleSave}
+        initialValues={config || undefined}
+      >
+        <Form.Item
+          name="name"
+          label={t('embeddingConfig.name')}
+          rules={[{ required: true, message: t('embeddingConfig.namePlaceholder') }]}
+        >
+          <Input placeholder={t('embeddingConfig.namePlaceholder')} />
+        </Form.Item>
+
+        <Form.Item
+          name="model_id"
+          label={t('embeddingConfig.modelId')}
+          rules={[{ required: true, message: t('embeddingConfig.modelIdPlaceholder') }]}
+        >
+          <Input placeholder={t('embeddingConfig.modelIdPlaceholder')} />
+        </Form.Item>
+
+        <Form.Item
+          name="base_url"
+          label={t('embeddingConfig.baseUrl')}
+          rules={[{ required: true, message: t('embeddingConfig.baseUrlPlaceholder') }]}
+        >
+          <Input placeholder={t('embeddingConfig.baseUrlPlaceholder')} />
+        </Form.Item>
+
+        <Form.Item
+          name="api_key"
+          label={t('embeddingConfig.apiKey')}
+          rules={[{ required: true, message: t('embeddingConfig.apiKeyPlaceholder') }]}
+        >
+          <Input.Password placeholder={t('embeddingConfig.apiKeyPlaceholder')} />
+        </Form.Item>
+
+        <Form.Item
+          name="description"
+          label={t('embeddingConfig.description')}
+        >
+          <Input.TextArea rows={3} placeholder={t('embeddingConfig.descriptionPlaceholder')} />
+        </Form.Item>
+
+        <Form.Item>
+          <Button
+            type="primary"
+            htmlType="submit"
+            icon={<SaveOutlined />}
+            loading={saving}
+            style={{ marginRight: 8 }}
+          >
+            {t('common.save')}
+          </Button>
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={handleReset}
+          >
+            {t('common.reset')}
+          </Button>
+        </Form.Item>
+      </Form>
+    </div>
   );
-}
+};
+
+export default EmbeddingConfigForm;

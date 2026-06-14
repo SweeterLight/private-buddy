@@ -2,38 +2,38 @@ package handler
 
 import (
 	"encoding/json"
-	"net/http"
+	"fmt"
 	"strconv"
 	"strings"
 
+	"github.com/gin-gonic/gin"
+
+	"private-buddy-server/internal/api/response"
 	"private-buddy-server/internal/database"
 	applogger "private-buddy-server/internal/logger"
 	"private-buddy-server/internal/model"
 	"private-buddy-server/internal/schema"
 	"private-buddy-server/internal/service"
+	"private-buddy-server/internal/service/memory"
 	"private-buddy-server/internal/service/runtime"
-
-	"github.com/gin-gonic/gin"
 )
 
 type Handler struct {
-	crudLLM       *service.CRUDBase[model.LLMConfig]
-	crudEmbedding *service.CRUDBase[model.EmbeddingConfig]
-	crudAgent     *service.CRUDBase[model.Agent]
-	crudSession   *service.CRUDBase[model.Session]
+	crudLLM     *service.CRUDBase[model.LLMConfig]
+	crudAgent   *service.CRUDBase[model.Agent]
+	crudSession *service.CRUDBase[model.Session]
 }
 
 func NewHandler() *Handler {
 	return &Handler{
-		crudLLM:       service.NewCRUDBase[model.LLMConfig]("LLM config"),
-		crudEmbedding: service.NewCRUDBase[model.EmbeddingConfig]("Embedding config"),
-		crudAgent:     service.NewCRUDBase[model.Agent]("Agent"),
-		crudSession:   service.NewCRUDBase[model.Session]("Session"),
+		crudLLM:     service.NewCRUDBase[model.LLMConfig]("LLM config"),
+		crudAgent:   service.NewCRUDBase[model.Agent]("Agent"),
+		crudSession: service.NewCRUDBase[model.Session]("Session"),
 	}
 }
 
 func (h *Handler) Root(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"message": "Private Buddy API is running"})
+	response.SuccessMessage(c, "Private Buddy API is running", nil)
 }
 
 func (h *Handler) GetVersion(c *gin.Context) {
@@ -43,13 +43,13 @@ func (h *Handler) GetVersion(c *gin.Context) {
 	if err == nil {
 		version = versionRecord.Version
 	}
-	c.JSON(http.StatusOK, gin.H{"version": version})
+	response.Success(c, gin.H{"version": version})
 }
 
 func (h *Handler) CreateLLMConfig(c *gin.Context) {
 	var req schema.LLMConfigCreate
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 	entity := model.LLMConfig{
@@ -62,20 +62,20 @@ func (h *Handler) CreateLLMConfig(c *gin.Context) {
 	if err := database.DB.Select(
 		"Name", "ModelID", "BaseURL", "APIKey", "Description",
 	).Create(&entity).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, schema.NewLLMConfigResponse(&entity))
+	response.Success(c, schema.NewLLMConfigResponse(&entity))
 }
 
 func (h *Handler) ListLLMConfigs(c *gin.Context) {
 	skip, limit := getPagination(c)
 	entities, err := h.crudLLM.GetMulti(skip, limit)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, schema.NewLLMConfigResponseList(entities))
+	response.Success(c, schema.NewLLMConfigResponseList(entities))
 }
 
 func (h *Handler) GetLLMConfig(c *gin.Context) {
@@ -85,7 +85,7 @@ func (h *Handler) GetLLMConfig(c *gin.Context) {
 		handleNotFound(c, "LLM config", id)
 		return
 	}
-	c.JSON(http.StatusOK, schema.NewLLMConfigResponse(entity))
+	response.Success(c, schema.NewLLMConfigResponse(entity))
 }
 
 func (h *Handler) UpdateLLMConfig(c *gin.Context) {
@@ -97,15 +97,17 @@ func (h *Handler) UpdateLLMConfig(c *gin.Context) {
 	}
 	var req schema.LLMConfigUpdate
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 	updates := req.BuildUpdates()
 	if len(updates) > 0 {
 		h.crudLLM.Update(entity, updates)
-		database.DB.First(entity, id)
+		if err := database.DB.First(entity, id).Error; err != nil {
+			applogger.L.Warn("failed to refresh LLM config after update", "id", id, "error", err)
+		}
 	}
-	c.JSON(http.StatusOK, schema.NewLLMConfigResponse(entity))
+	response.Success(c, schema.NewLLMConfigResponse(entity))
 }
 
 func (h *Handler) DeleteLLMConfig(c *gin.Context) {
@@ -116,99 +118,134 @@ func (h *Handler) DeleteLLMConfig(c *gin.Context) {
 		return
 	}
 	var referencingAgents []model.Agent
-	database.DB.Where("llm_config_id = ?", id).Find(&referencingAgents)
+	if err := database.DB.Where("llm_config_id = ?", id).Find(&referencingAgents).Error; err != nil {
+		applogger.L.Warn("failed to check referencing agents for LLM config", "id", id, "error", err)
+	}
 	if len(referencingAgents) > 0 {
 		names := make([]string, len(referencingAgents))
 		for i, a := range referencingAgents {
 			names[i] = a.Name
 		}
-		c.JSON(http.StatusBadRequest, gin.H{
-			"detail": "Cannot delete LLM config: it is referenced by " + strconv.Itoa(len(referencingAgents)) + " agent(s): " + strings.Join(names, ", "),
-		})
+		response.BadRequest(c, "Cannot delete LLM config: it is referenced by "+strconv.Itoa(len(referencingAgents))+" agent(s): "+strings.Join(names, ", "))
 		return
 	}
 	h.crudLLM.Delete(id)
-	c.JSON(http.StatusOK, gin.H{"message": "LLM config deleted successfully"})
+	response.SuccessMessage(c, "LLM config deleted successfully", nil)
 }
 
-func (h *Handler) CreateEmbeddingConfig(c *gin.Context) {
-	var req schema.EmbeddingConfigCreate
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
-		return
-	}
-	entity := model.EmbeddingConfig{
-		Name:        req.Name,
-		ModelID:     req.ModelID,
-		BaseURL:     req.BaseURL,
-		APIKey:      req.APIKey,
-		Description: req.Description,
-	}
-	if err := database.DB.Select(
-		"Name", "ModelID", "BaseURL", "APIKey", "Description",
-	).Create(&entity).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, schema.NewEmbeddingConfigResponse(&entity))
-}
-
-func (h *Handler) ListEmbeddingConfigs(c *gin.Context) {
-	skip, limit := getPagination(c)
-	entities, err := h.crudEmbedding.GetMulti(skip, limit)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, schema.NewEmbeddingConfigResponseList(entities))
-}
-
+// GetEmbeddingConfig returns the global embedding configuration.
+// Returns nil fields (zero values) if no config exists.
 func (h *Handler) GetEmbeddingConfig(c *gin.Context) {
-	id := getPathID(c)
-	entity, err := h.crudEmbedding.Get(id)
-	if err != nil {
-		handleNotFound(c, "Embedding config", id)
+	config := service.GetEmbeddingConfig()
+	if config == nil {
+		// Return empty config so the UI can show an empty form for initial setup
+		response.Success(c, schema.EmbeddingConfigResponse{})
 		return
 	}
-	c.JSON(http.StatusOK, schema.NewEmbeddingConfigResponse(entity))
+	response.Success(c, schema.NewEmbeddingConfigResponse(config))
 }
 
+// UpdateEmbeddingConfig updates the global embedding configuration (upsert).
 func (h *Handler) UpdateEmbeddingConfig(c *gin.Context) {
-	id := getPathID(c)
-	entity, err := h.crudEmbedding.Get(id)
-	if err != nil {
-		handleNotFound(c, "Embedding config", id)
-		return
-	}
 	var req schema.EmbeddingConfigUpdate
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
-	updates := req.BuildUpdates()
-	if len(updates) > 0 {
-		h.crudEmbedding.Update(entity, updates)
-		database.DB.First(entity, id)
+
+	config := service.GetEmbeddingConfig()
+	if config == nil {
+		// Create new config
+		entity := model.EmbeddingConfig{
+			Name:        derefString(req.Name),
+			ModelID:     derefString(req.ModelID),
+			BaseURL:     derefString(req.BaseURL),
+			APIKey:      derefString(req.APIKey),
+			Description: derefString(req.Description),
+		}
+		config = service.UpdateEmbeddingConfig(entity)
+	} else {
+		entity := *config
+		if req.Name != nil {
+			entity.Name = *req.Name
+		}
+		if req.ModelID != nil {
+			entity.ModelID = *req.ModelID
+		}
+		if req.BaseURL != nil {
+			entity.BaseURL = *req.BaseURL
+		}
+		if req.APIKey != nil {
+			entity.APIKey = *req.APIKey
+		}
+		if req.Description != nil {
+			entity.Description = *req.Description
+		}
+		config = service.UpdateEmbeddingConfig(entity)
 	}
-	c.JSON(http.StatusOK, schema.NewEmbeddingConfigResponse(entity))
+
+	if config == nil {
+		response.InternalError(c, "Failed to update embedding config")
+		return
+	}
+	response.Success(c, schema.NewEmbeddingConfigResponse(config))
 }
 
-func (h *Handler) DeleteEmbeddingConfig(c *gin.Context) {
-	id := getPathID(c)
-	_, err := h.crudEmbedding.Get(id)
-	if err != nil {
-		handleNotFound(c, "Embedding config", id)
+// GetUserProfile returns the current user's profile.
+// Returns zero-value response if user hasn't been set up yet.
+func (h *Handler) GetUserProfile(c *gin.Context) {
+	user := service.GetUserProfile()
+	if user == nil {
+		response.Success(c, schema.UserProfileResponse{})
 		return
 	}
-	database.DB.Model(&model.Agent{}).Where("embedding_config_id = ?", id).Update("embedding_config_id", 0)
-	h.crudEmbedding.Delete(id)
-	c.JSON(http.StatusOK, gin.H{"message": "Embedding config deleted successfully"})
+	response.Success(c, schema.NewUserProfileResponse(user))
+}
+
+// CreateOrUpdateUserProfile creates or updates the user profile.
+// Name is immutable once set (controlled via UNIQUE constraint on name column).
+// Bio can be updated at any time.
+func (h *Handler) CreateOrUpdateUserProfile(c *gin.Context) {
+	var req struct {
+		Name string `json:"name" binding:"required"`
+		Bio  string `json:"bio"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	existing := service.GetUserProfile()
+	if existing != nil {
+		// Update bio only (name is immutable)
+		updates := map[string]interface{}{"bio": req.Bio}
+		if err := database.DB.Model(existing).Updates(updates).Error; err != nil {
+			response.InternalError(c, err.Error())
+			return
+		}
+		if err := database.DB.First(existing, existing.ID).Error; err != nil {
+			applogger.L.Warn("failed to refresh user profile after update", "id", existing.ID, "error", err)
+		}
+		response.Success(c, schema.NewUserProfileResponse(existing))
+		return
+	}
+
+	user, err := service.CreateUser(req.Name, req.Bio)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint") {
+			response.BadRequest(c, fmt.Sprintf("User name '%s' already exists", req.Name))
+			return
+		}
+		response.InternalError(c, err.Error())
+		return
+	}
+	response.Success(c, schema.NewUserProfileResponse(user))
 }
 
 func (h *Handler) CreateAgent(c *gin.Context) {
 	var req schema.AgentCreate
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 	kbIDsJSON := "[]"
@@ -220,40 +257,47 @@ func (h *Handler) CreateAgent(c *gin.Context) {
 		Name:              req.Name,
 		CharacterSettings: req.CharacterSettings,
 		LLMConfigID:       req.LLMConfigID,
-		EmbeddingConfigID: req.EmbeddingConfigID,
 		Description:       req.Description,
 		Avatar:            req.Avatar,
 		KnowledgeBaseIDs:  kbIDsJSON,
 	}
 	if err := database.DB.Select(
-		"Name", "CharacterSettings", "LLMConfigID", "EmbeddingConfigID", "Description", "Avatar", "KnowledgeBaseIDs",
+		"Name", "CharacterSettings", "LLMConfigID", "Description", "Avatar", "KnowledgeBaseIDs",
 	).Create(&entity).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		if strings.Contains(err.Error(), "UNIQUE constraint") {
+			response.BadRequest(c, fmt.Sprintf("Agent name '%s' already exists", req.Name))
+			return
+		}
+		response.InternalError(c, err.Error())
 		return
 	}
 
 	// Register and start the agent's runtime so it can receive events immediately.
 	runtime.StartRuntime(entity.ID)
 
-	c.JSON(http.StatusOK, schema.NewAgentResponse(&entity))
+	response.Success(c, schema.NewAgentResponse(&entity))
 }
 
 func (h *Handler) ListAgents(c *gin.Context) {
 	skip, limit := getPagination(c)
 	entities, err := h.crudAgent.GetMulti(skip, limit)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, schema.NewAgentResponseList(entities))
+	response.Success(c, schema.NewAgentResponseList(entities))
 }
 
 func (h *Handler) ListAgentsWithSessions(c *gin.Context) {
 	var agents []model.Agent
-	database.DB.Order("updated_at DESC").Find(&agents)
+	if err := database.DB.Order("updated_at DESC").Find(&agents).Error; err != nil {
+		applogger.L.Error("failed to list agents with sessions", "error", err)
+		response.InternalError(c, "Failed to list agents")
+		return
+	}
 
 	if len(agents) == 0 {
-		c.JSON(http.StatusOK, []schema.AgentWithSessions{})
+		response.Success(c, []schema.AgentWithSessions{})
 		return
 	}
 
@@ -263,7 +307,9 @@ func (h *Handler) ListAgentsWithSessions(c *gin.Context) {
 	}
 
 	var allSessions []model.Session
-	database.DB.Where("agent_id IN ?", agentIDs).Order("updated_at DESC").Find(&allSessions)
+	if err := database.DB.Where("agent_id IN ?", agentIDs).Order("updated_at DESC").Find(&allSessions).Error; err != nil {
+		applogger.L.Warn("failed to load sessions for agent list, returning without sessions", "error", err)
+	}
 
 	sessionsByAgent := make(map[int64][]model.Session)
 	for _, s := range allSessions {
@@ -281,7 +327,7 @@ func (h *Handler) ListAgentsWithSessions(c *gin.Context) {
 			Sessions:      schema.NewSessionBriefList(sessions),
 		})
 	}
-	c.JSON(http.StatusOK, result)
+	response.Success(c, result)
 }
 
 func (h *Handler) GetAgent(c *gin.Context) {
@@ -291,7 +337,7 @@ func (h *Handler) GetAgent(c *gin.Context) {
 		handleNotFound(c, "Agent", id)
 		return
 	}
-	c.JSON(http.StatusOK, schema.NewAgentResponse(entity))
+	response.Success(c, schema.NewAgentResponse(entity))
 }
 
 func (h *Handler) UpdateAgent(c *gin.Context) {
@@ -303,15 +349,17 @@ func (h *Handler) UpdateAgent(c *gin.Context) {
 	}
 	var req schema.AgentUpdate
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 	updates := req.BuildUpdates()
 	if len(updates) > 0 {
 		h.crudAgent.Update(entity, updates)
-		database.DB.First(entity, id)
+		if err := database.DB.First(entity, id).Error; err != nil {
+			applogger.L.Warn("failed to refresh agent after update", "id", id, "error", err)
+		}
 	}
-	c.JSON(http.StatusOK, schema.NewAgentResponse(entity))
+	response.Success(c, schema.NewAgentResponse(entity))
 }
 
 func (h *Handler) DeleteAgent(c *gin.Context) {
@@ -328,14 +376,17 @@ func (h *Handler) DeleteAgent(c *gin.Context) {
 	}
 
 	var sessionIDs []int64
-	database.DB.Model(&model.Session{}).Where("agent_id = ?", id).Pluck("id", &sessionIDs)
+	if err := database.DB.Model(&model.Session{}).Where("agent_id = ?", id).Pluck("id", &sessionIDs).Error; err != nil {
+		applogger.L.Warn("failed to pluck session IDs for agent deletion", "agent_id", id, "error", err)
+	}
 
 	if len(sessionIDs) > 0 {
 		// NOTE: This logic assumes 1v1 (one agent per session).
 		// In multi-agent/group chat, deleting one agent should NOT cascade delete the entire session.
 		// This will need to be revisited when group chat is implemented.
 
-		// Delete all agent-related resources in dependency order:
+		// Delete all agent-related resources in dependency order.
+		// Each delete is checked independently — one failure should not block the rest.
 		// 1. Works (may reference drafts)
 		// 2. Message drafts
 		// 3. Interactions
@@ -343,27 +394,52 @@ func (h *Handler) DeleteAgent(c *gin.Context) {
 		// 5. Participant sessions
 		// 6. Messages
 		// 7. Sessions
-		database.DB.Where("session_id IN ?", sessionIDs).Delete(&model.Work{})
-		database.DB.Where("session_id IN ?", sessionIDs).Delete(&model.MessageDraft{})
-		database.DB.Where("session_id IN ?", sessionIDs).Delete(&model.Interaction{})
-		database.DB.Where("session_id IN ?", sessionIDs).Delete(&model.HistoricalSummary{})
-		database.DB.Where("session_id IN ?", sessionIDs).Delete(&model.ParticipantSession{})
-		database.DB.Where("session_id IN ?", sessionIDs).Delete(&model.Message{})
-		database.DB.Where("agent_id = ?", id).Delete(&model.Session{})
+		if err := database.DB.Where("session_id IN ?", sessionIDs).Delete(&model.Work{}).Error; err != nil {
+			applogger.L.Error("DeleteAgent: failed to delete works", "agent_id", id, "error", err)
+		}
+		if err := database.DB.Where("session_id IN ?", sessionIDs).Delete(&model.MessageDraft{}).Error; err != nil {
+			applogger.L.Error("DeleteAgent: failed to delete message drafts", "agent_id", id, "error", err)
+		}
+		if err := database.DB.Where("session_id IN ?", sessionIDs).Delete(&model.Interaction{}).Error; err != nil {
+			applogger.L.Error("DeleteAgent: failed to delete interactions", "agent_id", id, "error", err)
+		}
+		if err := database.DB.Where("session_id IN ?", sessionIDs).Delete(&model.HistoricalSummary{}).Error; err != nil {
+			applogger.L.Error("DeleteAgent: failed to delete historical summaries", "agent_id", id, "error", err)
+		}
+		if err := database.DB.Where("session_id IN ?", sessionIDs).Delete(&model.ParticipantSession{}).Error; err != nil {
+			applogger.L.Error("DeleteAgent: failed to delete participant sessions", "agent_id", id, "error", err)
+		}
+		if err := database.DB.Where("session_id IN ?", sessionIDs).Delete(&model.Message{}).Error; err != nil {
+			applogger.L.Error("DeleteAgent: failed to delete messages", "agent_id", id, "error", err)
+		}
+		if err := database.DB.Where("agent_id = ?", id).Delete(&model.Session{}).Error; err != nil {
+			applogger.L.Error("DeleteAgent: failed to delete sessions", "agent_id", id, "error", err)
+		}
+		if err := database.DB.Where("session_id IN ?", sessionIDs).Delete(&model.ScheduledEvent{}).Error; err != nil {
+			applogger.L.Error("DeleteAgent: failed to delete scheduled events", "agent_id", id, "error", err)
+		}
 
 		for _, sid := range sessionIDs {
 			removeSessionWorkspace(sid)
 		}
 	}
 
+	// Delete agent-level memory and cognition (not session-scoped)
+	if err := database.DB.Where("agent_id = ?", id).Delete(&model.AgentObservation{}).Error; err != nil {
+		applogger.L.Error("DeleteAgent: failed to delete agent observations", "agent_id", id, "error", err)
+	}
+	if err := database.DB.Where("agent_id = ?", id).Delete(&model.EntityProfile{}).Error; err != nil {
+		applogger.L.Error("DeleteAgent: failed to delete entity profiles", "agent_id", id, "error", err)
+	}
+
 	h.crudAgent.Delete(id)
-	c.JSON(http.StatusOK, gin.H{"message": "Agent deleted successfully"})
+	response.SuccessMessage(c, "Agent deleted successfully", nil)
 }
 
 func (h *Handler) CreateSession(c *gin.Context) {
 	var req schema.SessionCreate
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 	title := ""
@@ -375,20 +451,20 @@ func (h *Handler) CreateSession(c *gin.Context) {
 		AgentID: req.AgentID,
 	}
 	if err := database.DB.Select("Title", "AgentID").Create(&entity).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, schema.NewSessionResponse(&entity))
+	response.Success(c, schema.NewSessionResponse(&entity))
 }
 
 func (h *Handler) ListSessions(c *gin.Context) {
 	skip, limit := getPagination(c)
 	entities, err := h.crudSession.GetMulti(skip, limit)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, schema.NewSessionResponseList(entities))
+	response.Success(c, schema.NewSessionResponseList(entities))
 }
 
 func (h *Handler) GetSession(c *gin.Context) {
@@ -398,7 +474,7 @@ func (h *Handler) GetSession(c *gin.Context) {
 		handleNotFound(c, "Session", id)
 		return
 	}
-	c.JSON(http.StatusOK, schema.NewSessionResponse(entity))
+	response.Success(c, schema.NewSessionResponse(entity))
 }
 
 func (h *Handler) UpdateSession(c *gin.Context) {
@@ -410,15 +486,17 @@ func (h *Handler) UpdateSession(c *gin.Context) {
 	}
 	var req schema.SessionUpdate
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 	updates := req.BuildUpdates()
 	if len(updates) > 0 {
 		h.crudSession.Update(entity, updates)
-		database.DB.First(entity, id)
+		if err := database.DB.First(entity, id).Error; err != nil {
+			applogger.L.Warn("failed to refresh session after update", "id", id, "error", err)
+		}
 	}
-	c.JSON(http.StatusOK, schema.NewSessionResponse(entity))
+	response.Success(c, schema.NewSessionResponse(entity))
 }
 
 func (h *Handler) DeleteSession(c *gin.Context) {
@@ -437,27 +515,39 @@ func (h *Handler) DeleteSession(c *gin.Context) {
 	// 5. Participant sessions
 	// 6. Messages
 	// 7. Session itself
-	database.DB.Where("session_id = ?", id).Delete(&model.Work{})
-	database.DB.Where("session_id = ?", id).Delete(&model.MessageDraft{})
-	database.DB.Where("session_id = ?", id).Delete(&model.Interaction{})
-	database.DB.Where("session_id = ?", id).Delete(&model.HistoricalSummary{})
-	database.DB.Where("session_id = ?", id).Delete(&model.ParticipantSession{})
-	database.DB.Where("session_id = ?", id).Delete(&model.Message{})
+	if err := database.DB.Where("session_id = ?", id).Delete(&model.Work{}).Error; err != nil {
+		applogger.L.Error("DeleteSession: failed to delete works", "session_id", id, "error", err)
+	}
+	if err := database.DB.Where("session_id = ?", id).Delete(&model.MessageDraft{}).Error; err != nil {
+		applogger.L.Error("DeleteSession: failed to delete message drafts", "session_id", id, "error", err)
+	}
+	if err := database.DB.Where("session_id = ?", id).Delete(&model.Interaction{}).Error; err != nil {
+		applogger.L.Error("DeleteSession: failed to delete interactions", "session_id", id, "error", err)
+	}
+	if err := database.DB.Where("session_id = ?", id).Delete(&model.HistoricalSummary{}).Error; err != nil {
+		applogger.L.Error("DeleteSession: failed to delete historical summaries", "session_id", id, "error", err)
+	}
+	if err := database.DB.Where("session_id = ?", id).Delete(&model.ParticipantSession{}).Error; err != nil {
+		applogger.L.Error("DeleteSession: failed to delete participant sessions", "session_id", id, "error", err)
+	}
+	if err := database.DB.Where("session_id = ?", id).Delete(&model.Message{}).Error; err != nil {
+		applogger.L.Error("DeleteSession: failed to delete messages", "session_id", id, "error", err)
+	}
 	h.crudSession.Delete(id)
 	removeSessionWorkspace(id)
-	c.JSON(http.StatusOK, gin.H{"message": "Session deleted successfully"})
+	response.SuccessMessage(c, "Session deleted successfully", nil)
 }
 
 func (h *Handler) CreateMessage(c *gin.Context) {
 	sessionID := getPathID(c)
 	var session model.Session
 	if err := database.DB.First(&session, sessionID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "Session not found"})
+		response.NotFound(c, "Session not found")
 		return
 	}
 	var req schema.MessageCreate
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 	entity := model.Message{
@@ -468,44 +558,56 @@ func (h *Handler) CreateMessage(c *gin.Context) {
 		HasInteractions: model.HasInteractionsNone,
 	}
 	if err := database.DB.Create(&entity).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, schema.NewMessageResponse(&entity))
+
+	// Submit to the event vectorization service for embedding + observation.
+	memory.SubmitVectorization(memory.VectorizationTask{
+		MessageID: entity.ID,
+		SessionID: entity.SessionID,
+		Content:   entity.Content,
+	})
+
+	response.Success(c, schema.NewMessageResponse(&entity))
 }
 
 func (h *Handler) ListMessages(c *gin.Context) {
 	sessionID := getPathID(c)
 	var session model.Session
 	if err := database.DB.First(&session, sessionID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "Session not found"})
+		response.NotFound(c, "Session not found")
 		return
 	}
 	var messages []model.Message
-	database.DB.Where("session_id = ?", sessionID).Order("created_at ASC").Find(&messages)
-	c.JSON(http.StatusOK, schema.NewMessageResponseList(messages))
+	if err := database.DB.Where("session_id = ?", sessionID).Order("created_at ASC").Find(&messages).Error; err != nil {
+		applogger.L.Error("failed to list messages", "session_id", sessionID, "error", err)
+		response.InternalError(c, "Failed to list messages")
+		return
+	}
+	response.Success(c, schema.NewMessageResponseList(messages))
 }
 
 func (h *Handler) GetSearchConfig(c *gin.Context) {
 	config := service.GetSearchConfig()
-	c.JSON(http.StatusOK, schema.NewSearchConfigResponse(config))
+	response.Success(c, schema.NewSearchConfigResponse(config))
 }
 
 func (h *Handler) UpdateSearchConfig(c *gin.Context) {
 	var req schema.SearchConfigUpdate
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 	config := service.UpdateSearchConfig(req.Provider, req.APIKey, req.Description, req.IsActive)
-	c.JSON(http.StatusOK, schema.NewSearchConfigResponse(config))
+	response.Success(c, schema.NewSearchConfigResponse(config))
 }
 
 func (h *Handler) GetInteractions(c *gin.Context) {
 	agentMsgIDStr := c.Query("agent_msg_id")
 	agentMsgID, err := strconv.ParseInt(agentMsgIDStr, 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "Invalid agent_msg_id"})
+		response.BadRequest(c, "Invalid agent_msg_id")
 		return
 	}
 
@@ -513,7 +615,7 @@ func (h *Handler) GetInteractions(c *gin.Context) {
 	// Look up the message's draft_id first, then query interactions by draft_id.
 	var message model.Message
 	if err := database.DB.First(&message, agentMsgID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "Message not found"})
+		response.NotFound(c, "Message not found")
 		return
 	}
 	if message.DraftID == nil {
@@ -521,15 +623,17 @@ func (h *Handler) GetInteractions(c *gin.Context) {
 			"message_id", agentMsgID,
 			"role", message.Role,
 		)
-		c.JSON(http.StatusOK, schema.InteractionListResponse{
+		response.Success(c, schema.InteractionListResponse{
 			Interactions: []schema.InteractionResponse{},
 		})
 		return
 	}
 
 	var interactions []model.Interaction
-	database.DB.Where("draft_id = ?", *message.DraftID).Order("iteration, type").Find(&interactions)
-	c.JSON(http.StatusOK, schema.InteractionListResponse{
+	if err := database.DB.Where("draft_id = ?", *message.DraftID).Order("iteration, type").Find(&interactions).Error; err != nil {
+		applogger.L.Warn("GetInteractions: failed to load interactions", "draft_id", *message.DraftID, "error", err)
+	}
+	response.Success(c, schema.InteractionListResponse{
 		Interactions: schema.NewInteractionResponseList(interactions),
 	})
 }
@@ -538,10 +642,10 @@ func (h *Handler) GetInteractionStatus(c *gin.Context) {
 	id := getPathID(c)
 	var message model.Message
 	if err := database.DB.First(&message, id).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": "Message not found"})
+		response.NotFound(c, "Message not found")
 		return
 	}
-	c.JSON(http.StatusOK, schema.InteractionStatusResponse{
+	response.Success(c, schema.InteractionStatusResponse{
 		HasInteractions: message.HasInteractions,
 	})
 }

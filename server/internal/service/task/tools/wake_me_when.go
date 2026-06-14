@@ -113,18 +113,18 @@ func (w *WakeMeWhenTool) Schema() llm.FunctionDefinition {
 		Description: "Set an alarm to wake yourself up at a future time. " +
 			"When the alarm fires, you will receive a notification with the context you provide. " +
 			"This is YOUR self-wake mechanism — it does NOT create OS-level notifications or system alerts. " +
-			"Use this when the user asks you to remind them or follow up at a specific time. " +
+			"Use this when someone asks you to remind them or follow up at a specific time. " +
 			"\n\n" +
 			"CRITICAL: The 'message' parameter is an ACTION INSTRUCTION to your future self, " +
 			"NOT a description of what happened. When the alarm fires, you will see this message " +
 			"as your primary directive — so write it as a command telling yourself what to DO, " +
 			"not as a memo describing why the alarm was set. " +
 			"\n\n" +
-			"BAD: 'User asked to be reminded about the 3pm meeting.' (descriptive — sounds like the user is asking again) " +
+			"BAD: 'Someone asked to be reminded about the 3pm meeting.' (descriptive — sounds like they are asking again) " +
 			"\n" +
-			"GOOD: 'Tell the user: it is 3pm, time for the meeting with the design team in Conference Room B.' (actionable — tells you what to say)" +
+			"GOOD: 'Tell the person: it is 3pm, time for the meeting with the design team in Conference Room B.' (actionable — tells you what to say)" +
 			"\n\n" +
-			"FAST PATH: If the alarm only needs to send a simple message to the user (like a reminder), " +
+			"FAST PATH: If the alarm only needs to send a simple message (like a reminder), " +
 			"set action='send_message' and provide the exact message in action_content. This skips LLM " +
 			"processing entirely and delivers the message instantly when the alarm fires. " +
 			"Only use action='full_pipeline' when you need to perform complex actions (web search, " +
@@ -138,16 +138,16 @@ func (w *WakeMeWhenTool) Schema() llm.FunctionDefinition {
 				},
 				"message": map[string]interface{}{
 					"type":        "string",
-					"description": "Action instruction for your future self when the alarm fires. Write as a COMMAND telling yourself exactly what to DO and SAY. Example: 'Tell the user: you asked me to remind you about the 3pm meeting. It is now time — the meeting is in Conference Room B.' DO NOT write descriptive memos like 'User requested a reminder.' This field is always required as a fallback, even when using send_message action.",
+					"description": "Action instruction for your future self when the alarm fires. Write as a COMMAND telling yourself exactly what to DO and SAY. Example: 'Tell the person: you asked me to remind you about the 3pm meeting. It is now time — the meeting is in Conference Room B.' DO NOT write descriptive memos like 'Someone requested a reminder.' This field is always required as a fallback, even when using send_message action.",
 				},
 				"action": map[string]interface{}{
 					"type":        "string",
 					"enum":        []string{"send_message", "full_pipeline"},
-					"description": "How to handle the alarm when it fires. 'send_message': instantly send action_content to the user without any LLM processing (fast path, best for simple reminders). 'full_pipeline': go through the full LLM pipeline (needed for complex actions like web searches or tool usage). Default is 'full_pipeline' if omitted.",
+					"description": "How to handle the alarm when it fires. 'send_message': instantly send action_content without any LLM processing (fast path, best for simple reminders). 'full_pipeline': go through the full LLM pipeline (needed for complex actions like web searches or tool usage). Default is 'full_pipeline' if omitted.",
 				},
 				"action_content": map[string]interface{}{
 					"type":        "string",
-					"description": "The exact message to send to the user when the alarm fires. Only used when action='send_message'. This message is delivered instantly without any LLM processing, so write it as the final message the user will see. Example: '⏰ Reminder: it is 3pm, time for the meeting with the design team in Conference Room B.'",
+					"description": "The exact message to send when the alarm fires. Only used when action='send_message'. This message is delivered instantly without any LLM processing, so write it as the final message that will be seen. Example: '⏰ Reminder: it is 3pm, time for the meeting with the design team in Conference Room B.'",
 				},
 			},
 			"required": []string{"trigger_at", "message"},
@@ -263,9 +263,11 @@ func (w *WakeMeWhenTool) Execute(args map[string]interface{}) (string, error) {
 		}
 
 		// Mark the scheduled event as triggered
-		database.DB.Model(&model.ScheduledEvent{}).
+		if err := database.DB.Model(&model.ScheduledEvent{}).
 			Where("id = ?", event.ID).
-			Update("status", model.ScheduledEventTriggered)
+			Update("status", model.ScheduledEventTriggered).Error; err != nil {
+			applogger.L.Error("failed to mark scheduled event as triggered", "event_id", event.ID, "error", err)
+		}
 
 		applogger.L.Info("Scheduled event fired, sending to eventqueue",
 			"event_id", event.ID,

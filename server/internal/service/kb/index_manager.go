@@ -314,9 +314,11 @@ func (m *indexManager) buildHNSWIndex() {
 	m.indexType = indexTypeHNSW
 	m.mu.Unlock()
 
-	database.DB.Model(&model.KnowledgeBase{}).
+	if err := database.DB.Model(&model.KnowledgeBase{}).
 		Where("id = ? AND index_type = ?", m.kbID, int(indexTypeSwitching)).
-		Update("index_type", int(indexTypeHNSW))
+		Update("index_type", int(indexTypeHNSW)).Error; err != nil {
+		applogger.L.Error("failed to update KB index type after HNSW build", "kb_id", m.kbID, "error", err)
+	}
 
 	applogger.L.Info("HNSW index built successfully", "kb_id", m.kbID,
 		"total_vectors", len(addedChunkIDs))

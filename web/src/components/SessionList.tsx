@@ -10,13 +10,14 @@ import { logger } from '../logger';
 import { confirmDelete } from '../utils/confirm';
 import AgentAvatar from './AgentAvatar';
 
-interface AgentListProps {
+interface SessionListProps {
   currentSessionId: number | null;
   onSelectSession: (session: Session | null) => void;
   onCreateSession: (agentId: number) => void;
+  embeddingReady?: boolean;
 }
 
-const AgentList: React.FC<AgentListProps> = ({ currentSessionId, onSelectSession, onCreateSession }) => {
+const SessionList: React.FC<SessionListProps> = ({ currentSessionId, onSelectSession, onCreateSession, embeddingReady }) => {
   const { t } = useTranslation();
   const [agents, setAgents] = useState<AgentWithSessions[]>([]);
   const [loading, setLoading] = useState(false);
@@ -136,6 +137,8 @@ const AgentList: React.FC<AgentListProps> = ({ currentSessionId, onSelectSession
     onClick: () => onCreateSession(agent.id),
   }));
 
+  const isCreateDisabled = agents.length === 0 || !embeddingReady;
+
   return (
     <div className="app-sidebar">
       {/* Header toolbar */}
@@ -143,15 +146,15 @@ const AgentList: React.FC<AgentListProps> = ({ currentSessionId, onSelectSession
         <Dropdown
           menu={{ items: agentMenuItems }}
           trigger={['click']}
-          disabled={agents.length === 0}
+          disabled={isCreateDisabled}
           placement="bottomLeft"
         >
           <Button
             type="text"
             icon={<MessageCircle size={18} />}
-            disabled={agents.length === 0}
+            disabled={isCreateDisabled}
             title={t('sidebar.newChat')}
-            style={{ color: 'var(--color-text-secondary)' }}
+            style={{ color: isCreateDisabled ? 'var(--color-text-placeholder)' : 'var(--color-text-secondary)' }}
           />
         </Dropdown>
       </div>
@@ -242,4 +245,4 @@ const AgentList: React.FC<AgentListProps> = ({ currentSessionId, onSelectSession
   );
 };
 
-export default AgentList;
+export default SessionList;

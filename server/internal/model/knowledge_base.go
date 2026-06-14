@@ -15,7 +15,6 @@ type KnowledgeBase struct {
 	ID                int64     `gorm:"primaryKey;autoIncrement" json:"id"`
 	Name              string    `gorm:"type:varchar(255);not null" json:"name"`
 	Description       string    `gorm:"type:text;not null;default:''" json:"description"`
-	EmbeddingConfigID int64     `gorm:"not null;index;column:embedding_config_id" json:"embedding_config_id"`
 	IndexType         int       `gorm:"not null;default:0" json:"index_type"` // 0=flat, 1=switching, 2=hnsw
 	IndexFilePath     string    `gorm:"type:varchar(500);not null;default:''" json:"index_file_path"`
 	DocumentCount     int       `gorm:"not null;default:0" json:"document_count"`

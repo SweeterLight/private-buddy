@@ -2,7 +2,6 @@ package handler
 
 import (
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,10 +9,13 @@ import (
 	"private-buddy-server/internal/config"
 	"private-buddy-server/internal/constants"
 	"private-buddy-server/internal/database"
+	applogger "private-buddy-server/internal/logger"
 	"private-buddy-server/internal/model"
 	"private-buddy-server/internal/schema"
 	"private-buddy-server/internal/service"
 	"private-buddy-server/internal/service/kb"
+
+	"private-buddy-server/internal/api/response"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -34,29 +36,28 @@ func NewKBHandler() *KBHandler {
 func (h *KBHandler) CreateKnowledgeBase(c *gin.Context) {
 	var req schema.KnowledgeBaseCreate
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
 	entity := model.KnowledgeBase{
-		Name:              req.Name,
-		Description:       req.Description,
-		EmbeddingConfigID: req.EmbeddingConfigID,
+		Name:        req.Name,
+		Description: req.Description,
 	}
 
 	if err := kb.CreateKnowledgeBase(&entity); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusCreated, entity)
+	response.Success(c, entity)
 }
 
 func (h *KBHandler) ListKnowledgeBases(c *gin.Context) {
 	skip, limit := getPagination(c)
 	entities, err := h.crudKB.GetMulti(skip, limit)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
 
@@ -68,67 +69,69 @@ func (h *KBHandler) ListKnowledgeBases(c *gin.Context) {
 	results := make([]kbWithStats, 0)
 	for _, entity := range entities {
 		var count int64
-		database.DB.Model(&model.Document{}).Where("knowledge_base_id = ?", entity.ID).Count(&count)
+		if err := database.DB.Model(&model.Document{}).Where("knowledge_base_id = ?", entity.ID).Count(&count).Error; err != nil {
+			applogger.L.Warn("failed to count documents for KB list", "kb_id", entity.ID, "error", err)
+		}
 		results = append(results, kbWithStats{
 			KnowledgeBase: entity,
 			DocumentCount: count,
 		})
 	}
 
-	c.JSON(http.StatusOK, results)
+	response.Success(c, results)
 }
 
 func (h *KBHandler) GetKnowledgeBase(c *gin.Context) {
 	entity, err := h.crudKB.Get(getPathID(c))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": err.Error()})
+		response.NotFound(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, entity)
+	response.Success(c, entity)
 }
 
 func (h *KBHandler) UpdateKnowledgeBase(c *gin.Context) {
 	var req schema.KnowledgeBaseUpdate
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
 	id := getPathID(c)
 	entity, err := h.crudKB.Get(id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": err.Error()})
+		response.NotFound(c, err.Error())
 		return
 	}
 
 	updates := req.BuildUpdates()
 	if len(updates) > 0 {
 		if err := h.crudKB.Update(entity, updates); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+			response.InternalError(c, err.Error())
 			return
 		}
 	}
 
-	c.JSON(http.StatusOK, entity)
+	response.Success(c, entity)
 }
 
 func (h *KBHandler) DeleteKnowledgeBase(c *gin.Context) {
 	id := getPathID(c)
 	if err := kb.DeleteKnowledgeBase(id); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusNoContent, nil)
+	response.Success(c, nil)
 }
 
 func (h *KBHandler) ListDocuments(c *gin.Context) {
 	kbID := getPathID(c)
 	var documents []model.Document
 	if err := database.DB.Where("knowledge_base_id = ?", kbID).Order("created_at DESC").Find(&documents).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, documents)
+	response.Success(c, documents)
 }
 
 func (h *KBHandler) UploadDocument(c *gin.Context) {
@@ -136,7 +139,7 @@ func (h *KBHandler) UploadDocument(c *gin.Context) {
 
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": "No file provided"})
+		response.BadRequest(c, "No file provided")
 		return
 	}
 	defer file.Close()
@@ -144,29 +147,27 @@ func (h *KBHandler) UploadDocument(c *gin.Context) {
 	// Validate file extension
 	ext := strings.ToLower(filepath.Ext(header.Filename))
 	if !constants.IsAllowedFileExtension(ext) {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"detail": fmt.Sprintf("Unsupported file type: %s. Allowed types: .txt, .md, .pdf", ext),
-		})
+		response.BadRequest(c, fmt.Sprintf("Unsupported file type: %s. Allowed types: .txt, .md, .pdf", ext))
 		return
 	}
 
 	kbDir := config.Get().GetKBDir()
 	docDir := filepath.Join(kbDir, fmt.Sprintf("%d", kbID), "files")
 	if err := os.MkdirAll(docDir, 0755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
 
 	filePath := filepath.Join(docDir, header.Filename)
 	dst, err := os.Create(filePath)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
 	defer dst.Close()
 
 	if _, err := dst.ReadFrom(file); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
 
@@ -178,30 +179,30 @@ func (h *KBHandler) UploadDocument(c *gin.Context) {
 	}
 
 	if err := database.DB.Create(&doc).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
 
 	kb.SubmitDocument(doc.ID)
 
-	c.JSON(http.StatusCreated, doc)
+	response.Success(c, doc)
 }
 
 func (h *KBHandler) GetDocument(c *gin.Context) {
 	docID := getPathIDByParam(c, "doc_id")
 	entity, err := h.crudDoc.Get(docID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": err.Error()})
+		response.NotFound(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, entity)
+	response.Success(c, entity)
 }
 
 func (h *KBHandler) DeleteDocument(c *gin.Context) {
 	docID := getPathIDByParam(c, "doc_id")
 	var doc model.Document
 	if err := database.DB.First(&doc, docID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"detail": err.Error()})
+		response.NotFound(c, err.Error())
 		return
 	}
 
@@ -210,47 +211,59 @@ func (h *KBHandler) DeleteDocument(c *gin.Context) {
 	}
 
 	var chunkCount int64
-	database.DB.Model(&model.DocumentChunk{}).Where("document_id = ? AND deleted = 0", docID).Count(&chunkCount)
+	if err := database.DB.Model(&model.DocumentChunk{}).Where("document_id = ? AND deleted = 0", docID).Count(&chunkCount).Error; err != nil {
+		applogger.L.Error("failed to count chunks for document soft-delete", "doc_id", docID, "error", err)
+		response.InternalError(c, "Failed to delete document")
+		return
+	}
 	if chunkCount > 0 {
-		database.DB.Model(&model.DocumentChunk{}).Where("document_id = ? AND deleted = 0", docID).Update("deleted", 1)
-		database.DB.Model(&model.KnowledgeBase{}).Where("id = ?", doc.KnowledgeBaseID).
-			Update("deleted_count", gorm.Expr("deleted_count + ?", chunkCount))
+		if err := database.DB.Model(&model.DocumentChunk{}).Where("document_id = ? AND deleted = 0", docID).Update("deleted", 1).Error; err != nil {
+			applogger.L.Error("failed to soft-delete document chunks", "doc_id", docID, "error", err)
+		}
+		if err := database.DB.Model(&model.KnowledgeBase{}).Where("id = ?", doc.KnowledgeBaseID).
+			Update("deleted_count", gorm.Expr("deleted_count + ?", chunkCount)).Error; err != nil {
+			applogger.L.Warn("failed to update KB deleted_count after document delete", "kb_id", doc.KnowledgeBaseID, "error", err)
+		}
 	}
 
-	database.DB.Delete(&doc)
+	if err := database.DB.Delete(&doc).Error; err != nil {
+		applogger.L.Error("failed to delete document", "doc_id", docID, "error", err)
+		response.InternalError(c, "Failed to delete document")
+		return
+	}
 
-	c.JSON(http.StatusNoContent, nil)
+	response.Success(c, nil)
 }
 
 func (h *KBHandler) SearchKB(c *gin.Context) {
 	kbID := getPathID(c)
 	var req schema.SearchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
 	results, err := kb.SearchKB(c.Request.Context(), kbID, req.Query, req.TopK)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, results)
+	response.Success(c, results)
 }
 
 func (h *KBHandler) SearchMultiKB(c *gin.Context) {
 	var req schema.MultiKBSearchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"detail": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
 	results, err := kb.SearchMultiKB(c.Request.Context(), req.KBIDs, req.Query, req.TopK)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"detail": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, results)
+	response.Success(c, results)
 }
 
 // isImageFile checks if the file extension indicates an image.

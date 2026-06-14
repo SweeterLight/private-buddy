@@ -13,9 +13,10 @@ import (
 	"private-buddy-server/internal/database"
 	"private-buddy-server/internal/model"
 	"private-buddy-server/internal/service"
-	"private-buddy-server/internal/service/chat/chatctx"
+	"private-buddy-server/internal/service/chat/chatcontext"
 	"private-buddy-server/internal/service/eventqueue"
 	"private-buddy-server/internal/service/llm"
+	"private-buddy-server/internal/service/memory"
 
 	applogger "private-buddy-server/internal/logger"
 )
@@ -52,9 +53,18 @@ const (
 
 // heartbeatOutput is the structured output schema for the LLM heartbeat self-reflection.
 type heartbeatOutput struct {
-	Action string `json:"action"`
-	Reason string `json:"reason"`
+	Action          string `json:"action"`
+	Reason          string `json:"reason"`
+	TargetSessionID int64  `json:"target_session_id"`
+	MessageDraft    string `json:"message_draft"`
 }
+
+// Proactive message frequency control constants.
+// Ensures the agent doesn't spam the user with unsolicited messages.
+const (
+	proactiveMinIntervalHours = 12 // Minimum hours between proactive messages
+	proactiveMinHeartbeats    = 6  // Minimum heartbeat ticks between proactive messages
+)
 
 // agentRuntime is the event-driven execution engine for an agent.
 // It transforms an Agent from a passive configuration object into an active,
@@ -63,16 +73,19 @@ type heartbeatOutput struct {
 // The runtime runs a single goroutine event loop (for-select + eventCh + heartbeatTimer).
 // Work execution runs in separate goroutines, allowing the event loop to remain responsive.
 type agentRuntime struct {
-	agentID           int64
-	workRouter        workRouter
-	activeWorks       []*work
-	eventCh           <-chan eventqueue.AgentEvent // Read-only channel subscribed from eventqueue.Global
-	commitCh          chan commitRequest
-	workDoneCh        chan *work
-	heartbeatInterval time.Duration                              // Base heartbeat interval (adaptive)
-	idleTicks         int                                        // Consecutive idle heartbeats (for tickless backoff)
-	mu                sync.Mutex                                 // Protects activeWrites for external queries
-	onStatusChange    func(agentID, sessionID int64, status int) // Callback for SSE push
+	agentID             int64
+	workRouter          workRouter
+	activeWorks         []*work
+	eventCh             <-chan eventqueue.AgentEvent // Read-only channel subscribed from eventqueue.Global
+	commitCh            chan commitRequest
+	workDoneCh          chan *work
+	heartbeatInterval   time.Duration                              // Base heartbeat interval (adaptive)
+	idleTicks           int                                        // Consecutive idle heartbeats (for tickless backoff)
+	heartbeatTick       int                                        // Total heartbeat ticks (for check scheduling)
+	lastProactiveSent   time.Time                                  // Last time a proactive message was sent
+	ticksSinceProactive int                                        // Heartbeat ticks since last proactive message
+	mu                  sync.Mutex                                 // Protects activeWrites for external queries
+	onStatusChange      func(agentID, sessionID int64, status int) // Callback for SSE push
 }
 
 // newAgentRuntime creates a new runtime for an agent.
@@ -127,16 +140,20 @@ func (r *agentRuntime) Run(ctx context.Context) {
 			// - For EventTypeScheduled: the original user message that caused
 			//   the alarm (TriggerMessageID), preserving the causal chain.
 			if payload, ok := event.Payload.(*eventqueue.NewMessagePayload); ok && payload.MessageID > 0 {
-				database.DB.Model(&model.ParticipantSession{}).
+				if err := database.DB.Model(&model.ParticipantSession{}).
 					Where("session_id = ? AND participant_type = ? AND participant_id = ?",
 						event.SessionID, model.ParticipantTypeAgent, r.agentID).
-					Update("last_read_message_id", payload.MessageID)
+					Update("last_read_message_id", payload.MessageID).Error; err != nil {
+					applogger.L.Warn("failed to advance last_read_message_id on new message event", "error", err)
+				}
 			}
 			if payload, ok := event.Payload.(*eventqueue.ScheduledEventPayload); ok && payload.TriggerMessageID > 0 {
-				database.DB.Model(&model.ParticipantSession{}).
+				if err := database.DB.Model(&model.ParticipantSession{}).
 					Where("session_id = ? AND participant_type = ? AND participant_id = ? AND last_read_message_id < ?",
 						event.SessionID, model.ParticipantTypeAgent, r.agentID, payload.TriggerMessageID).
-					Update("last_read_message_id", payload.TriggerMessageID)
+					Update("last_read_message_id", payload.TriggerMessageID).Error; err != nil {
+					applogger.L.Warn("failed to advance last_read_message_id on scheduled event", "error", err)
+				}
 			}
 
 			// Fast path for scheduled events with action=send_message.
@@ -285,7 +302,7 @@ func (r *agentRuntime) generateAcknowledgment(ctx context.Context, messageConten
 		userMsg = userMsg[:200] + "..."
 	}
 
-	prompt := fmt.Sprintf("The user said: \"%s\"\n\nGenerate a brief, natural acknowledgment in the same language as the user's message. Keep it to 1-2 short sentences. Examples: \"Got it, I'll work on that\", \"Sure, let me handle that\", \"On it!\". Do not repeat the user's message or add unnecessary details.", userMsg)
+	prompt := fmt.Sprintf("The person you are talking to said: \"%s\"\n\nGenerate a brief, natural acknowledgment in the same language as their message. Keep it to 1-2 short sentences. Examples: \"Got it, I'll work on that\", \"Sure, let me handle that\", \"On it!\". Do not repeat their message or add unnecessary details.", userMsg)
 
 	chatModel := llm.NewChatModelWithTemperature(
 		llmConfig.BaseURL, llmConfig.APIKey, llmConfig.ModelID, llm.TemperatureDeterministic,
@@ -484,10 +501,6 @@ func (r *agentRuntime) hasActiveWorkInSession(sessionID int64) bool {
 // Events reset idleTicks to 0, naturally returning to the active phase.
 // Consecutive "none" self-reflections increment idleTicks, transitioning
 // through steady to dormant.
-//
-// If a ScheduledEvent is due sooner than the heartbeat, the timer is set
-// to fire at the event's trigger_at instead. This ensures timely wake-up
-// without requiring a separate scheduler.
 func (r *agentRuntime) resetHeartbeatTimer(timer *time.Timer) {
 	if !timer.Stop() {
 		select {
@@ -497,31 +510,7 @@ func (r *agentRuntime) resetHeartbeatTimer(timer *time.Timer) {
 	}
 
 	interval := r.adjustHeartbeatInterval()
-
-	// Check if a scheduled event should fire sooner than the heartbeat
-	if until := r.nextScheduledEventInterval(); until > 0 && until < interval {
-		interval = until
-	}
-
 	timer.Reset(interval)
-}
-
-// nextScheduledEventInterval returns the duration until the next pending
-// scheduled event for this agent. Returns 0 if no events are pending.
-func (r *agentRuntime) nextScheduledEventInterval() time.Duration {
-	var event model.ScheduledEvent
-	if err := database.DB.
-		Where("agent_id = ? AND status = ? AND trigger_at > ?", r.agentID, model.ScheduledEventPending, time.Now()).
-		Order("trigger_at ASC").
-		First(&event).Error; err != nil {
-		return 0
-	}
-
-	until := time.Until(event.TriggerAt)
-	if until <= 0 {
-		return time.Millisecond // Fire immediately
-	}
-	return until
 }
 
 // adjustHeartbeatInterval computes the current heartbeat interval based on
@@ -550,20 +539,38 @@ func (r *agentRuntime) adjustHeartbeatInterval() time.Duration {
 //
 // Self-reflection flow:
 //  1. If agent has active works, skip (works drive themselves)
-//  2. Load all sessions the agent participates in
-//  3. For each session, check for unread messages and proactive opportunities
-//  4. Use LLM to decide whether to act (none / proactive_message / context_refresh)
-//  5. Execute the decided action
+//  2. Increment heartbeat tick counter
+//  3. Run scheduled heartbeat checks
+//  4. Load all sessions the agent participates in
+//  5. For each session, check for unread messages and proactive opportunities
+//  6. Use LLM to decide whether to act (none / proactive_message)
+//  7. Execute the decided action
 func (r *agentRuntime) handleHeartbeat(ctx context.Context) {
 	if len(r.activeWorks) > 0 {
 		// Agent is busy — no self-reflection needed
 		return
 	}
 
+	r.heartbeatTick++
+
+	// Obligation check (every 3 ticks)
+	if r.heartbeatTick%obligationCheckInterval == 0 {
+		r.checkObligations(ctx)
+	}
+
+	// Memory density check (every 6 ticks)
+	if r.heartbeatTick%memoryDensityCheckInterval == 0 {
+		r.checkMemoryDensity(ctx)
+	}
+
 	// Load all sessions this agent participates in
 	var sessions []model.ParticipantSession
-	database.DB.Where("participant_type = ? AND participant_id = ?",
-		model.ParticipantTypeAgent, r.agentID).Find(&sessions)
+	if err := database.DB.Where("participant_type = ? AND participant_id = ?",
+		model.ParticipantTypeAgent, r.agentID).Find(&sessions).Error; err != nil {
+		applogger.L.Error("heartbeat: failed to load agent sessions", "error", err)
+		r.idleTicks++
+		return
+	}
 
 	if len(sessions) == 0 {
 		r.idleTicks++
@@ -575,10 +582,13 @@ func (r *agentRuntime) handleHeartbeat(ctx context.Context) {
 	var sessionsWithActivity []model.ParticipantSession
 	for _, ps := range sessions {
 		var maxMsgID int64
-		database.DB.Model(&model.Message{}).
+		if err := database.DB.Model(&model.Message{}).
 			Where("session_id = ?", ps.SessionID).
 			Select("COALESCE(MAX(id), 0)").
-			Scan(&maxMsgID)
+			Scan(&maxMsgID).Error; err != nil {
+			applogger.L.Warn("heartbeat: failed to scan max message ID", "session_id", ps.SessionID, "error", err)
+			continue
+		}
 
 		if maxMsgID > ps.LastReadMessageID {
 			sessionsWithActivity = append(sessionsWithActivity, ps)
@@ -598,7 +608,7 @@ func (r *agentRuntime) handleHeartbeat(ctx context.Context) {
 	// Use LLM self-reflection to decide what to do
 	agent := service.GetAgent(r.agentID)
 	llmConfig := service.GetLLMConfig(agent.LLMConfigID)
-	action := r.selfReflect(ctx, agent, llmConfig, sessionsWithActivity)
+	output := r.selfReflect(ctx, agent, llmConfig, sessionsWithActivity)
 
 	// Advance last_read_message_id for all reflected-upon sessions.
 	// The self-reflection IS the act of reading — the agent has acknowledged
@@ -607,23 +617,15 @@ func (r *agentRuntime) handleHeartbeat(ctx context.Context) {
 	// wasting LLM calls every heartbeat tick.
 	r.markSessionsAsRead(sessionsWithActivity)
 
-	switch action {
-	case heartbeatNone:
+	switch output.Action {
+	case "proactive_message":
+		r.executeProactiveMessage(ctx, output)
+	default:
 		r.idleTicks++
+		r.ticksSinceProactive++
 		applogger.L.Debug("Agent heartbeat self-reflection: none",
 			"agent_id", r.agentID,
 			"idle_ticks", r.idleTicks,
-		)
-	case heartbeatProactiveMessage:
-		// Reset idle ticks since the agent is taking action
-		r.idleTicks = 0
-		applogger.L.Info("Agent heartbeat: proactive message",
-			"agent_id", r.agentID,
-		)
-	case heartbeatContextRefresh:
-		// Context refresh doesn't reset idle ticks (no user-visible action)
-		applogger.L.Info("Agent heartbeat: context refresh",
-			"agent_id", r.agentID,
 		)
 	}
 }
@@ -638,16 +640,21 @@ func (r *agentRuntime) handleHeartbeat(ctx context.Context) {
 func (r *agentRuntime) markSessionsAsRead(sessions []model.ParticipantSession) {
 	for _, ps := range sessions {
 		var maxMsgID int64
-		database.DB.Model(&model.Message{}).
+		if err := database.DB.Model(&model.Message{}).
 			Where("session_id = ?", ps.SessionID).
 			Select("COALESCE(MAX(id), 0)").
-			Scan(&maxMsgID)
+			Scan(&maxMsgID).Error; err != nil {
+			applogger.L.Warn("markSessionsAsRead: failed to scan max message ID", "session_id", ps.SessionID, "error", err)
+			continue
+		}
 
 		if maxMsgID > ps.LastReadMessageID {
-			database.DB.Model(&model.ParticipantSession{}).
+			if err := database.DB.Model(&model.ParticipantSession{}).
 				Where("session_id = ? AND participant_type = ? AND participant_id = ? AND last_read_message_id < ?",
 					ps.SessionID, model.ParticipantTypeAgent, r.agentID, maxMsgID).
-				Update("last_read_message_id", maxMsgID)
+				Update("last_read_message_id", maxMsgID).Error; err != nil {
+				applogger.L.Warn("markSessionsAsRead: failed to update last_read_message_id", "session_id", ps.SessionID, "error", err)
+			}
 
 			applogger.L.Debug("Heartbeat: advanced last_read_message_id",
 				"agent_id", r.agentID,
@@ -664,9 +671,9 @@ func (r *agentRuntime) markSessionsAsRead(sessions []model.ParticipantSession) {
 // The prompt is intentionally conservative: "only speak up if there is genuine
 // incremental value." Early iterations should err on the side of silence rather
 // than disturbing the user.
-func (r *agentRuntime) selfReflect(ctx context.Context, agent *model.Agent, llmConfig *model.LLMConfig, sessions []model.ParticipantSession) heartbeatAction {
+func (r *agentRuntime) selfReflect(ctx context.Context, agent *model.Agent, llmConfig *model.LLMConfig, sessions []model.ParticipantSession) heartbeatOutput {
 	if llmConfig == nil {
-		return heartbeatNone
+		return heartbeatOutput{Action: "none"}
 	}
 
 	// Build session summaries for the self-reflection prompt
@@ -692,22 +699,26 @@ func (r *agentRuntime) selfReflect(ctx context.Context, agent *model.Agent, llmC
 	}
 
 	if len(sessionDescs) == 0 {
-		return heartbeatNone
+		return heartbeatOutput{Action: "none"}
 	}
 
-	prompt := fmt.Sprintf(`You are an AI agent performing a self-reflection check. You have unread messages in your sessions.
+	prompt := fmt.Sprintf(`You are an AI agent's self-reflection subsystem. Based on the following structured state, decide your action.
 
 Agent role: %s
 
 Sessions with unread messages:
 %s
 
-Decide what to do:
-- "none": No action needed. The messages don't require a proactive response.
-- "proactive_message": You have genuinely valuable information to share that the user doesn't know yet. Only use this if you have NEW information (e.g., a long task completed, new findings, important updates).
-- "context_refresh": Your context is stale and you should refresh your understanding, but no message to the user is needed yet.
+Decision rules:
+- "none": No action needed. Default choice.
+- "proactive_message": You have genuinely valuable NEW information the person doesn't know yet (e.g., a long task completed, new findings, important updates). NOT greetings, NOT confirmation of existence.
 
-IMPORTANT: Be conservative. Only choose "proactive_message" if you are certain the user would want to hear from you unprompted. When in doubt, choose "none".`,
+Three thresholds for proactive_message:
+1. INCREMENTAL VALUE: Can you provide information the person doesn't already have and would find useful?
+2. TIMING: Based on last_active_at, is the person likely awake and receptive?
+3. FREQUENCY: Don't message if you've spoken recently without being prompted.
+
+IMPORTANT: Err on the side of silence. Only choose proactive_message if you would regret NOT informing them.`,
 		agent.Description, strings.Join(sessionDescs, "\n"))
 
 	chatModel := llm.NewChatModelWithTemperature(
@@ -718,22 +729,29 @@ IMPORTANT: Be conservative. Only choose "proactive_message" if you are certain t
 		{Role: "user", Content: prompt},
 	}, llm.JSONSchemaDefinition{
 		Name:        "HeartbeatReflection",
-		Description: "Agent's self-reflection decision on whether to take proactive action",
+		Description: "Agent's structured self-reflection decision on whether to take proactive action",
 		Strict:      true,
 		Schema: jsonschema.Definition{
 			Type: jsonschema.Object,
 			Properties: map[string]jsonschema.Definition{
 				"action": {
 					Type: jsonschema.String,
-					Enum: []string{"none", "proactive_message", "context_refresh"},
+					Enum: []string{"none", "proactive_message"},
 					Description: "The action to take: " +
 						"'none' for no action, " +
-						"'proactive_message' if you have genuinely valuable new information, " +
-						"'context_refresh' if your context is stale but no message is needed",
+						"'proactive_message' if you have genuinely valuable new information",
 				},
 				"reason": {
 					Type:        jsonschema.String,
-					Description: "Brief explanation of why this action was chosen",
+					Description: "Brief explanation of why this action was chosen, referencing the three thresholds if applicable",
+				},
+				"target_session_id": {
+					Type:        jsonschema.Number,
+					Description: "If proactive_message, the session ID to send the message to. Omit for other actions.",
+				},
+				"message_draft": {
+					Type:        jsonschema.String,
+					Description: "If proactive_message, the draft message content. Omit for other actions.",
 				},
 			},
 			Required: []string{"action", "reason"},
@@ -743,30 +761,121 @@ IMPORTANT: Be conservative. Only choose "proactive_message" if you are certain t
 	if err != nil {
 		applogger.L.Error("Heartbeat self-reflection LLM call failed",
 			"agent_id", r.agentID, "error", err)
-		return heartbeatNone
+		return heartbeatOutput{Action: "none"}
 	}
 
 	var output heartbeatOutput
 	if err := json.Unmarshal([]byte(result), &output); err != nil {
 		applogger.L.Error("Heartbeat self-reflection output parse failed",
 			"agent_id", r.agentID, "error", err)
-		return heartbeatNone
+		return heartbeatOutput{Action: "none"}
 	}
 
 	applogger.L.Info("Heartbeat self-reflection result",
 		"agent_id", r.agentID,
 		"action", output.Action,
 		"reason", output.Reason,
+		"target_session_id", output.TargetSessionID,
 	)
 
-	switch output.Action {
-	case "proactive_message":
-		return heartbeatProactiveMessage
-	case "context_refresh":
-		return heartbeatContextRefresh
-	default:
-		return heartbeatNone
+	return output
+}
+
+// executeProactiveMessage sends a proactive message generated by the heartbeat
+// self-reflection to the target session. It enforces the frequency gate before
+// sending: the agent must not have sent a proactive message within the last
+// 12 hours or within the last 6 heartbeat ticks.
+func (r *agentRuntime) executeProactiveMessage(ctx context.Context, output heartbeatOutput) {
+	// Frequency gate: check if too soon since last proactive message
+	if !r.canSendProactiveMessage() {
+		applogger.L.Info("Proactive message suppressed by frequency gate",
+			"agent_id", r.agentID,
+			"session_id", output.TargetSessionID,
+			"ticks_since_last", r.ticksSinceProactive,
+		)
+		return
 	}
+
+	// Validate the target session exists and the agent is a participant
+	if output.TargetSessionID <= 0 {
+		applogger.L.Error("Proactive message has no target session",
+			"agent_id", r.agentID)
+		return
+	}
+
+	if strings.TrimSpace(output.MessageDraft) == "" {
+		applogger.L.Warn("Proactive message draft is empty",
+			"agent_id", r.agentID, "session_id", output.TargetSessionID)
+		return
+	}
+
+	// Create the message directly (no draft, since this is spontaneous)
+	msg := model.Message{
+		SessionID:       output.TargetSessionID,
+		Role:            model.MessageRoleAssistant,
+		Content:         output.MessageDraft,
+		Status:          model.MessageStatusCompleted,
+		HasInteractions: model.HasInteractionsNone,
+	}
+	if err := database.DB.Create(&msg).Error; err != nil {
+		applogger.L.Error("Failed to create proactive message",
+			"agent_id", r.agentID,
+			"session_id", output.TargetSessionID,
+			"error", err,
+		)
+		return
+	}
+
+	// Update agent's last_active_at and last_read_message_id
+	if err := database.DB.Model(&model.ParticipantSession{}).
+		Where("session_id = ? AND participant_type = ? AND participant_id = ?",
+			output.TargetSessionID, model.ParticipantTypeAgent, r.agentID).
+		Updates(map[string]interface{}{
+			"last_active_at":       time.Now(),
+			"last_read_message_id": msg.ID,
+		}).Error; err != nil {
+		applogger.L.Warn("failed to update participant session after proactive send", "error", err)
+	}
+
+	// Update frequency tracking
+	r.lastProactiveSent = time.Now()
+	r.ticksSinceProactive = 0
+	r.idleTicks = 0
+
+	// Submit to the event vectorization service for embedding + observation.
+	memory.SubmitVectorization(memory.VectorizationTask{
+		MessageID: msg.ID,
+		SessionID: msg.SessionID,
+		Content:   msg.Content,
+	})
+
+	// Push message event to SSE clients
+	pushMessageEvent(output.TargetSessionID, msg.ID, msg.Content, msg.HasInteractions)
+
+	// Trigger summary generation if needed
+	chatcontext.MaybeTriggerSummary(ctx, output.TargetSessionID, r.agentID)
+
+	applogger.L.Info("Proactive message sent",
+		"agent_id", r.agentID,
+		"session_id", output.TargetSessionID,
+		"message_id", msg.ID,
+		"reason", output.Reason,
+	)
+}
+
+// canSendProactiveMessage checks whether the frequency gate allows a
+// proactive message. Returns true if both the time-based and tick-based
+// thresholds are satisfied.
+func (r *agentRuntime) canSendProactiveMessage() bool {
+	if !r.lastProactiveSent.IsZero() {
+		if time.Since(r.lastProactiveSent).Hours() < proactiveMinIntervalHours {
+			return false
+		}
+	}
+	if r.ticksSinceProactive < proactiveMinHeartbeats {
+		return false
+	}
+	return true
 }
 
 // handleCommits processes draft commit requests from the commitCh.
@@ -810,21 +919,26 @@ func (r *agentRuntime) commitDraft(ctx context.Context, req commitRequest) {
 	}
 
 	// Update draft status and content
-	database.DB.Model(&model.MessageDraft{}).Where("id = ?", draft.ID).Updates(map[string]interface{}{
+	if err := database.DB.Model(&model.MessageDraft{}).Where("id = ?", draft.ID).Updates(map[string]interface{}{
 		"status":  model.DraftStatusCommitted,
 		"content": req.content,
-	})
+	}).Error; err != nil {
+		applogger.L.Error("commitDraft: failed to update draft", "draft_id", draft.ID, "error", err)
+		return
+	}
 
 	// Update agent's last_active_at and last_read_message_id in the participant session.
 	// The agent has "read" everything up to and including its own message,
 	// since it produced it based on all prior context.
-	database.DB.Model(&model.ParticipantSession{}).
+	if err := database.DB.Model(&model.ParticipantSession{}).
 		Where("session_id = ? AND participant_type = ? AND participant_id = ? AND last_read_message_id < ?",
 			draft.SessionID, model.ParticipantTypeAgent, r.agentID, msg.ID).
 		Updates(map[string]interface{}{
 			"last_active_at":       time.Now(),
 			"last_read_message_id": msg.ID,
-		})
+		}).Error; err != nil {
+		applogger.L.Warn("commitDraft: failed to update participant session", "draft_id", draft.ID, "error", err)
+	}
 
 	applogger.L.Info("Draft committed to messages",
 		"draft_id", draft.ID,
@@ -832,11 +946,18 @@ func (r *agentRuntime) commitDraft(ctx context.Context, req commitRequest) {
 		"session_id", draft.SessionID,
 	)
 
+	// Submit to the event vectorization service for embedding + observation.
+	memory.SubmitVectorization(memory.VectorizationTask{
+		MessageID: msg.ID,
+		SessionID: msg.SessionID,
+		Content:   msg.Content,
+	})
+
 	// Push message event to SSE clients
 	pushMessageEvent(draft.SessionID, msg.ID, msg.Content, msg.HasInteractions)
 
 	// Trigger summary generation if needed (sender-agnostic, based on message count)
-	chatctx.MaybeTriggerSummary(ctx, draft.SessionID, r.agentID)
+	chatcontext.MaybeTriggerSummary(ctx, draft.SessionID, r.agentID)
 }
 
 // GetActiveWorkCount returns the number of currently active works.
@@ -911,21 +1032,38 @@ const userFriendlyErrorMsg = "Sorry, something went wrong on the server. Please 
 // are returned since mid-execution resumption is not supported.
 func recoverActiveWorks(agentID int64, runtime *agentRuntime) []*work {
 	var workRecords []model.Work
-	database.DB.Where("agent_id = ? AND status = ?", agentID, model.WorkStatusRunning).Find(&workRecords)
+	if err := database.DB.Where("agent_id = ? AND status = ?", agentID, model.WorkStatusRunning).Find(&workRecords).Error; err != nil {
+		applogger.L.Error("recoverActiveWorks: failed to load work records", "agent_id", agentID, "error", err)
+		return nil
+	}
 
 	for _, wr := range workRecords {
 		// Mark recovered works as abandoned since we can't resume mid-execution
-		database.DB.Model(&model.Work{}).Where("id = ?", wr.ID).
-			Update("status", model.WorkStatusAbandoned)
+		if err := database.DB.Model(&model.Work{}).Where("id = ?", wr.ID).
+			Update("status", model.WorkStatusAbandoned).Error; err != nil {
+			applogger.L.Error("recoverActiveWorks: failed to mark work as abandoned", "work_id", wr.ID, "error", err)
+		}
 
 		if wr.DraftID != nil {
-			database.DB.Model(&model.MessageDraft{}).Where("id = ?", *wr.DraftID).
-				Update("status", model.DraftStatusDiscarded)
+			if err := database.DB.Model(&model.MessageDraft{}).Where("id = ?", *wr.DraftID).
+				Update("status", model.DraftStatusDiscarded).Error; err != nil {
+				applogger.L.Error("recoverActiveWorks: failed to discard draft", "draft_id", *wr.DraftID, "error", err)
+			}
+		}
+
+		// Reset participant status to idle so the frontend doesn't show stuck "responding"
+		if err := database.DB.Model(&model.ParticipantSession{}).
+			Where("session_id = ? AND participant_type = ? AND participant_id = ?",
+				wr.SessionID, model.ParticipantTypeAgent, agentID).
+			Update("status", model.ParticipantStatusIdle).Error; err != nil {
+			applogger.L.Error("recoverActiveWorks: failed to reset participant status",
+				"session_id", wr.SessionID, "agent_id", agentID, "error", err)
 		}
 
 		applogger.L.Info("Recovered work marked as abandoned",
 			"work_id", wr.ID,
 			"agent_id", agentID,
+			"session_id", wr.SessionID,
 		)
 	}
 

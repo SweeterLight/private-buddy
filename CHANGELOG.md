@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.0.16] - 2026-06-14
+
+### Added
+- **Memory System**: event-driven observation recording with use-dependent importance scoring, daily multiplicative decay, semantic retrieval, and relevance propagation. Includes LLM-driven EntityProfile generation — per-entity (user/agent/session) narrative profiles from top-ranked observations, with MD5 dedup and fresh generation each time
+- **Identity-Driven Prompt Architecture**: all prompt templates use the agent's actual name instead of "AI assistant," and message evidence labels use real names instead of "Assistant"/"User" — rooted in the sycophancy literature and episodic memory theory
+- **User System**: `User` model with profile endpoints and frontend form; user name propagates through all prompt construction paths
+- **Unified API Response**: all handlers return HTTP 200 with business codes in the body, transparently unwrapped by a frontend axios interceptor
+- **Embedding Guard**: `RequireEmbedding` middleware blocks API requests when embedding configuration is absent, preventing silent failures
+
+### Changed
+- **User State Model**: person-state semantics replace user-centric framing — schema descriptions shifted from "the user" to "the person" for neutrality
+
+### Fixed
+- **Silent Error Handling**: ~90 instances of `_ = db.XXX(...)` replaced with proper checks across 17 files, using a six-category strategy
+
 ## [0.0.15] - 2026-06-10
 
 ### Added
@@ -46,6 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Database Migration Detection**: enum migration check now correctly handles VARCHAR columns (not just TEXT), fixing silent migration skip
 - **Message List Styling**: CSS class mapping updated after role type change from string to int
+
+## [0.0.13] - 2026-06-07
 
 ### Fixed
 - **LLM Hallucination Prevention**: discard tool_call reasoning content in TaskLoop to prevent internal process information from leaking into chat layer, which caused the chat LLM to misinterpret reasoning (e.g., "the command is correct") as accomplished facts (e.g., "the service is running")

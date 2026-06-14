@@ -1,10 +1,11 @@
-package chatctx
+package chatcontext
 
 import (
 	"context"
 
 	"private-buddy-server/internal/database"
 	"private-buddy-server/internal/model"
+	"private-buddy-server/internal/service"
 	"private-buddy-server/internal/service/llm"
 	"private-buddy-server/internal/service/vectorstore"
 
@@ -18,9 +19,12 @@ const (
 )
 
 // Segment represents a retrieved context segment used in prompt assembly.
+// MessageID is set for chat-history segments so the memory system can
+// locate the corresponding observation and apply a retrieval hit.
 type Segment struct {
-	Content string `json:"content"`
-	Source  int    `json:"source"`
+	MessageID int64  `json:"message_id"`
+	Content   string `json:"content"`
+	Source    int    `json:"source"`
 }
 
 // RetrievalResult holds all context components retrieved for chat processing.
@@ -32,29 +36,10 @@ type RetrievalResult struct {
 	HasEmbedding     bool            `json:"has_embedding"`
 }
 
-// getEmbeddingConfigForSession returns the embedding config for a session's agent.
-// Traverses session -> agent -> embedding_config to find the configuration.
-// Returns nil if any step fails (session not found, agent not found, no config).
-func getEmbeddingConfigForSession(sessionID int64) *model.EmbeddingConfig {
-	var session model.Session
-	if err := database.DB.First(&session, sessionID).Error; err != nil {
-		return nil
-	}
-
-	var agent model.Agent
-	if err := database.DB.First(&agent, session.AgentID).Error; err != nil {
-		return nil
-	}
-
-	if agent.EmbeddingConfigID > 0 {
-		var config model.EmbeddingConfig
-		if err := database.DB.First(&config, agent.EmbeddingConfigID).Error; err != nil {
-			return nil
-		}
-		return &config
-	}
-
-	return nil
+// getEmbeddingConfig returns the global embedding config.
+// Returns nil if no config exists.
+func getEmbeddingConfig() *model.EmbeddingConfig {
+	return service.GetEmbeddingConfig()
 }
 
 // GetRecentMessages returns recent messages from a session in chronological order.
@@ -68,7 +53,10 @@ func GetRecentMessages(sessionID int64, limit int, status int) []model.Message {
 	}
 
 	var messages []model.Message
-	query.Order("id DESC").Limit(limit).Find(&messages)
+	if err := query.Order("id DESC").Limit(limit).Find(&messages).Error; err != nil {
+		applogger.L.Warn("GetRecentMessages: failed to load messages", "error", err)
+		return nil
+	}
 
 	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
 		messages[i], messages[j] = messages[j], messages[i]
@@ -119,7 +107,7 @@ func GetContextForChat(ctx context.Context, sessionID, agentID int64, query stri
 
 	result.RecentMessages = GetRecentMessages(sessionID, recentCount, model.MessageStatusCompleted)
 
-	embeddingConfig := getEmbeddingConfigForSession(sessionID)
+	embeddingConfig := getEmbeddingConfig()
 	if embeddingConfig != nil {
 		result.HasEmbedding = true
 		embeddingSvc := llm.NewEmbeddingService(embeddingConfig.BaseURL, embeddingConfig.APIKey, embeddingConfig.ModelID, 0)
@@ -131,8 +119,9 @@ func GetContextForChat(ctx context.Context, sessionID, agentID int64, query stri
 			} else {
 				for _, sr := range searchResults {
 					result.RelevantSegments = append(result.RelevantSegments, Segment{
-						Content: sr.Content,
-						Source:  SourceChatHistory,
+						MessageID: sr.MessageID,
+						Content:   sr.Content,
+						Source:    SourceChatHistory,
 					})
 				}
 				applogger.L.Info("RAG retrieved segments",
@@ -158,14 +147,17 @@ func GetContextForChat(ctx context.Context, sessionID, agentID int64, query stri
 // Messages that existed before embedding was configured are NOT retroactively
 // indexed. A batch re-index mechanism is needed to cover that case.
 func IndexMessages(ctx context.Context, sessionID int64, messageIDs []int64) bool {
-	embeddingConfig := getEmbeddingConfigForSession(sessionID)
+	embeddingConfig := getEmbeddingConfig()
 	if embeddingConfig == nil {
-		applogger.L.Info("No embedding config for session, skipping indexing", "session_id", sessionID)
+		applogger.L.Info("No embedding config, skipping indexing", "session_id", sessionID)
 		return false
 	}
 
 	var messages []model.Message
-	database.DB.Where("id IN ? AND session_id = ?", messageIDs, sessionID).Find(&messages)
+	if err := database.DB.Where("id IN ? AND session_id = ?", messageIDs, sessionID).Find(&messages).Error; err != nil {
+		applogger.L.Warn("IndexMessages: failed to load messages", "session_id", sessionID, "error", err)
+		return false
+	}
 
 	if len(messages) == 0 {
 		applogger.L.Warn("No messages found for indexing", "session_id", sessionID)

@@ -5,7 +5,7 @@ import "time"
 // SearchConfig stores the web search provider configuration.
 // Currently supports Tavily as the search provider.
 type SearchConfig struct {
-	ID          int64     `gorm:"primaryKey;default:1" json:"id"`
+	ID          int64     `gorm:"primaryKey;autoIncrement;type:INTEGER PRIMARY KEY AUTOINCREMENT;default:1" json:"id"`
 	Provider    string    `gorm:"type:varchar(50);not null;default:'tavily'" json:"provider"`
 	APIKey      string    `gorm:"type:varchar(255);not null;default:'';column:api_key" json:"api_key"`
 	Description string    `gorm:"type:text;not null;default:''" json:"description"`

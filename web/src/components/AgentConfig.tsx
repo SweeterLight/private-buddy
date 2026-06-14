@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Button, Modal, Form, Input, message, Select, Upload } from 'antd';
 import { EditOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
-import type { Agent, LLMConfig, EmbeddingConfig, KnowledgeBase } from '../types';
-import { agentApi, llmConfigApi, embeddingConfigApi, kbApi, uploadApi } from '../services/api';
+import type { Agent, LLMConfig, KnowledgeBase } from '../types';
+import { agentApi, llmConfigApi, kbApi, uploadApi } from '../services/api';
 import { logger } from '../logger';
 import { confirmDelete } from '../utils/confirm';
 import AgentAvatar from './AgentAvatar';
@@ -18,7 +18,6 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
   const { t } = useTranslation();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [llmConfigs, setLLMConfigs] = useState<LLMConfig[]>([]);
-  const [embeddingConfigs, setEmbeddingConfigs] = useState<EmbeddingConfig[]>([]);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
@@ -52,15 +51,6 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
     }
   };
 
-  const loadEmbeddingConfigs = async () => {
-    try {
-      const response = await embeddingConfigApi.list();
-      setEmbeddingConfigs(response.data);
-    } catch (error) {
-      logger.error('Failed to load embedding configs:', error);
-    }
-  };
-
   const loadKnowledgeBases = async () => {
     try {
       const response = await kbApi.list();
@@ -73,7 +63,6 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
   useEffect(() => {
     loadAgents();
     loadLLMConfigs();
-    loadEmbeddingConfigs();
     loadKnowledgeBases();
   }, []);
 
@@ -184,11 +173,9 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
     setEditAvatarFile(null);
     setEditAvatarPreview('');
     editForm.setFieldsValue({
-      name: agent.name,
       character_settings: agent.character_settings || '',
       description: agent.description || '',
       llm_config_id: agent.llm_config_id,
-      embedding_config_id: agent.embedding_config_id || 0,
       knowledge_base_ids: agent.knowledge_base_ids || [],
     });
     setEditModalVisible(true);
@@ -303,7 +290,6 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
           name="agent_form"
           onFinish={handleCreateAgent}
           style={{ marginTop: '16px' }}
-          initialValues={{ embedding_config_id: 0 }}
         >
           <Form.Item label={t('agent.avatar')}>
             {renderAvatarUpload(setCreateAvatarFile, setCreateAvatarPreview, undefined, createAvatarPreview)}
@@ -313,6 +299,7 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
             label={t('agent.name')}
             name="name"
             rules={[{ required: true, message: t('agent.namePlaceholder') }]}
+            extra={<span style={{ fontSize: 12, color: 'var(--color-text-placeholder)' }}>{t('userProfile.nameImmutable')}</span>}
           >
             <Input placeholder={t('agent.namePlaceholder')} />
           </Form.Item>
@@ -344,22 +331,6 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
           >
             <Select placeholder={t('agent.llmConfigIdPlaceholder')}>
               {llmConfigs.map(config => (
-                <Select.Option key={config.id} value={config.id}>
-                  {config.name}
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Form.Item
-            label={t('agent.embeddingConfigId')}
-            name="embedding_config_id"
-          >
-            <Select placeholder={t('agent.embeddingConfigIdPlaceholder')} allowClear>
-              <Select.Option key={0} value={0}>
-                {t('agent.defaultEmbedding')}
-              </Select.Option>
-              {embeddingConfigs.map(config => (
                 <Select.Option key={config.id} value={config.id}>
                   {config.name}
                 </Select.Option>
@@ -417,13 +388,17 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
             )}
           </Form.Item>
 
-          <Form.Item
-            label={t('agent.name')}
-            name="name"
-            rules={[{ required: true, message: t('agent.namePlaceholder') }]}
-          >
-            <Input placeholder={t('agent.namePlaceholder')} />
-          </Form.Item>
+          <div style={{ marginBottom: 24, marginTop: -8 }}>
+            <div style={{ fontSize: 14, color: 'var(--color-text-secondary)', marginBottom: 4 }}>
+              {t('agent.name')}
+            </div>
+            <div style={{ fontSize: 15, fontWeight: 500 }}>
+              {editingAgent?.name}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--color-text-placeholder)', marginTop: 2 }}>
+              {t('userProfile.nameImmutable')}
+            </div>
+          </div>
 
           <Form.Item
             label={t('agent.characterSettings')}
@@ -452,22 +427,6 @@ const AgentConfig: React.FC<AgentConfigProps> = ({ showCreate, onCreateClose, on
           >
             <Select placeholder={t('agent.llmConfigIdPlaceholder')}>
               {llmConfigs.map(config => (
-                <Select.Option key={config.id} value={config.id}>
-                  {config.name}
-                </Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Form.Item
-            label={t('agent.embeddingConfigId')}
-            name="embedding_config_id"
-          >
-            <Select placeholder={t('agent.embeddingConfigIdPlaceholder')} allowClear>
-              <Select.Option key={0} value={0}>
-                {t('agent.defaultEmbedding')}
-              </Select.Option>
-              {embeddingConfigs.map(config => (
                 <Select.Option key={config.id} value={config.id}>
                   {config.name}
                 </Select.Option>
