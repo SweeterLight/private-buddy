@@ -15,8 +15,12 @@ import (
 )
 
 // personStateInferencePrompt is the LLM prompt template for inferring the current state of the person you are talking to.
-// It takes one parameter: recent_messages (formatted dialog text).
-const personStateInferencePrompt = `Based on the following recent conversation, infer the current state of the person you are talking to.
+// It takes three parameters: agent_name, character_settings, recent_messages (formatted dialog text).
+// The role context ensures the LLM correctly interprets the conversation as role-playing
+// rather than treating casual questions (e.g., "Are you asleep?") as needing real-time information.
+const personStateInferencePrompt = `You are %s, %s. You are inferring the current state of the person you are talking to.
+
+Based on the following recent conversation, infer the current state of the person you are talking to.
 
 Recent conversation:
 %s
@@ -27,7 +31,9 @@ Also determine if their request requires interaction with the external world:
 - Set needs_world_interaction=true if the request needs: real-time information (news, weather, stock prices), 
   file operations (create, modify, delete files), code execution, web searches, or any tool usage.
 - Set needs_world_interaction=false if the LLM can answer directly from its training data 
-  (general knowledge, advice, explanations, casual conversation).`
+  (general knowledge, advice, explanations, casual conversation).
+
+IMPORTANT: You are the person named above(%s). Questions directed at you (e.g., "Are you asleep?", "How are you?", "What do you think?") are casual chat and do NOT require world interaction. Only set needs_world_interaction=true when the person explicitly asks you to perform actions that require tools or external data.`
 
 // PersonState represents the inferred person state from conversation context.
 //
@@ -113,6 +119,7 @@ func formatRecentMessages(recentMessages []model.Message, userName, agentName st
 // InferPersonState infers the user's current state from recent conversation messages.
 // Uses TemperatureDeterministic for consistent, deterministic outputs.
 // userName is the actual name of the person being talked to, agentName is the agent's own name.
+// characterSettings provides the agent's role context to prevent misinterpretation of casual questions.
 // Returns nil if inference fails, allowing the chat flow to continue without person state.
 func InferPersonState(
 	ctx context.Context,
@@ -120,6 +127,7 @@ func InferPersonState(
 	recentMessages []model.Message,
 	userName string,
 	agentName string,
+	characterSettings string,
 ) *PersonState {
 	if len(recentMessages) == 0 {
 		return nil
@@ -128,7 +136,7 @@ func InferPersonState(
 	chatModel := llm.NewChatModelWithTemperature(llmConfig.BaseURL, llmConfig.APIKey, llmConfig.ModelID, llm.TemperatureDeterministic)
 
 	dialogText := formatRecentMessages(recentMessages, userName, agentName)
-	prompt := fmt.Sprintf(personStateInferencePrompt, dialogText)
+	prompt := fmt.Sprintf(personStateInferencePrompt, agentName, characterSettings, dialogText, agentName)
 
 	result, err := chatModel.ChatWithJSONSchema(ctx, []llm.Message{
 		{Role: "user", Content: prompt},

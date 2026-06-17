@@ -53,7 +53,8 @@ func Init() {
 	dsn := dbPath + "?_journal_mode=WAL&_busy_timeout=5000&_txlock=immediate"
 
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
-		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
+		DefaultContextTimeout: 30 * time.Second,
+		Logger:                gormlogger.Default.LogMode(gormlogger.Silent),
 		NowFunc: func() time.Time {
 			return time.Now().Local()
 		},
@@ -100,6 +101,7 @@ func AutoMigrate() {
 		&model.EventVector{},
 		&model.EntityProfile{},
 		&model.User{},
+		&model.ModelCapability{},
 	}
 
 	// Run structural migrations BEFORE addMissingColumns, because some

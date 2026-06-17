@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [0.0.17] - 2026-06-18
+
+### Added
+- **Structured Output Compatibility Layer**: automatic two-level fallback (json_schema → function_call) for models that don't support `response_format.type: json_schema` (e.g., DeepSeek). Persistent capability cache (`(base_url, model_id)` keyed) avoids repeated trial-and-error across restarts
+- **Global DB Query Timeout**: `DefaultContextTimeout: 30s` in GORM config prevents indefinite blocking on database operations
+
+### Fixed
+- **PersonState False Positives**: missing role context in person state inference caused casual greetings ("Are you asleep?") to be misclassified as requiring world interaction. Fixed by injecting `agentName` + `characterSettings` into the prompt with identity-driven design
+- **PersonState Consumption in Simple Context**: `assembleSimpleContext` (V < N branch) was not consuming `personStateResult`, causing inferred state to be silently discarded
+
 ## [0.0.16] - 2026-06-14
 
 ### Added

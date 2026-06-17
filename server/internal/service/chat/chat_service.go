@@ -290,7 +290,7 @@ func (p *pipeline) inferPersonState(ctx context.Context) {
 		p.sessionID, min(int(p.messageCount), p.windowSize), model.MessageStatusCompleted,
 	)
 
-	p.personStateResult = chatcontext.InferPersonState(ctx, p.llmConfig, recentMessagesForState, p.userName, p.agent.Name)
+	p.personStateResult = chatcontext.InferPersonState(ctx, p.llmConfig, recentMessagesForState, p.userName, p.agent.Name, p.agent.CharacterSettings)
 
 	if p.personStateResult != nil {
 		p.needsWorldInteraction = p.personStateResult.NeedsWorldInteraction
@@ -379,6 +379,12 @@ func (p *pipeline) assembleSimpleContext() ([]llm.Message, string, bool) {
 		p.userName,
 	)
 
+	// Convert person state to natural language description for prompt injection
+	var personStateDescription string
+	if p.personStateResult != nil {
+		personStateDescription = p.personStateResult.ToNaturalLanguage(p.userName)
+	}
+
 	messages := chatcontext.AssembleContext(
 		characterSettings,
 		"",
@@ -389,7 +395,7 @@ func (p *pipeline) assembleSimpleContext() ([]llm.Message, string, bool) {
 		-1,
 		1,
 		len(recentMessages),
-		"",
+		personStateDescription,
 		p.taskResult,
 		p.userName,
 	)

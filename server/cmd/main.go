@@ -58,6 +58,7 @@ func main() {
 
 	database.Init()
 	database.AutoMigrate()
+	llm.LoadCapabilityCache()
 
 	// Initialize memory system with embedding service for event vector storage.
 	// Load the first agent's embedding config to create the service.
